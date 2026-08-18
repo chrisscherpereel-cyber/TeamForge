@@ -1,0 +1,12 @@
+# TeamForge — team-formation application
+streamlit>=1.36
+pandas>=2.2
+numpy>=1.26
+openpyxl>=3.1          # Excel export
+cryptography>=42.0     # Fernet encryption of all PII at rest
+requests>=2.32         # Graph / Dropbox / pCloud REST
+msal>=1.28             # Microsoft 365 (Graph) auth
+# Optional storage backend (install only if you use it):
+# dropbox>=11.36
+# Testing only:
+# pytest>=8.0
