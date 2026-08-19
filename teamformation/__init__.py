@@ -6,6 +6,6 @@ Microsoft 365 / SMTP email) and refocuses the whole workflow on building
 balanced, workable course teams from a short student survey.
 """
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 APP_NAME = "TeamForge"
 APP_TAGLINE = "team formation, made clear"

@@ -201,7 +201,7 @@ def _team_num_den(idxs, parsed, weights):
 # Simulated annealing over swaps
 # --------------------------------------------------------------------------- #
 def _anneal(teams, parsed, weights, cons, must_adj, movable_mask,
-            locked_team_mask, rng, iterations):
+            locked_team_mask, rng, iterations, accept_worse=True):
     nteams = len(teams)
     num = [0.0] * nteams
     den = [0.0] * nteams
@@ -240,7 +240,8 @@ def _anneal(teams, parsed, weights, cons, must_adj, movable_mask,
         new_obj = (new_sum_num / new_sum_den) if new_sum_den else 0.0
         delta = new_obj - cur
         T = T0 * ((T1 / T0) ** (it / iterations))
-        if delta >= 0 or rng.random() < math.exp(delta / max(T, 1e-6)):
+        take = delta >= 0 or (accept_worse and rng.random() < math.exp(delta / max(T, 1e-6)))
+        if take:
             teams[ta][ka] = ib
             teams[tb][kb] = ia
             num[ta], den[ta] = na_num, na_den
@@ -261,13 +262,21 @@ def generate(students: List[dict], weights: Dict[str, int],
              locked_assignments: Optional[Dict[str, int]] = None,
              locked_teams: Optional[List[int]] = None,
              initial_teams: Optional[List[List[dict]]] = None,
-             seed: Optional[int] = None, iterations: Optional[int] = None
-             ) -> GenerationResult:
-    """Generate teams. See module docstring for constraint semantics."""
+             seed: Optional[int] = None, iterations: Optional[int] = None,
+             method: str = "linear") -> GenerationResult:
+    """Generate teams. See module docstring for constraint semantics.
+
+    method: how the linear weighted-criteria objective is optimized —
+        "linear" : simulated annealing (global search)   [default]
+        "hill"   : hill climbing (accept only improvements)
+        "greedy" : feasible greedy construction, no local search
+        "random" : random feasible assignment (baseline)
+    """
     n = len(students)
     if seed is None:
         seed = random.randrange(1, 2**31 - 1)
     rng = random.Random(seed)
+    accept_worse = method != "hill"
 
     if n == 0:
         return GenerationResult([], [], seed, 0, weights, {"n": 0})
@@ -282,6 +291,8 @@ def generate(students: List[dict], weights: Dict[str, int],
 
     if iterations is None:
         iterations = min(max(3000, 250 * n), 80000)
+    if method in ("greedy", "random"):
+        iterations = 0
 
     # ---- Regeneration from an existing configuration (keeps team count/sizes) --
     if initial_teams is not None:
@@ -297,7 +308,8 @@ def generate(students: List[dict], weights: Dict[str, int],
             if 0 <= t < len(teams_idx):
                 locked_team_mask[t] = True
         best, obj = _anneal(teams_idx, parsed, weights, cons, must_adj,
-                            movable_mask, locked_team_mask, rng, iterations)
+                            movable_mask, locked_team_mask, rng, iterations,
+                            accept_worse=accept_worse)
         result_teams = [[students[i] for i in team] for team in best]
         return GenerationResult(result_teams, [len(t) for t in best], seed, obj,
                                 dict(weights), {"n": n, "regenerated": True})
@@ -333,7 +345,8 @@ def generate(students: List[dict], weights: Dict[str, int],
         for idx in locked_pos:
             movable_mask[idx] = False
         best, _ = _anneal(teams_idx, parsed, weights, cons, must_adj,
-                          movable_mask, [False] * len(teams_idx), rng, iterations)
+                          movable_mask, [False] * len(teams_idx), rng, iterations,
+                          accept_worse=accept_worse)
         all_teams.extend(best)
 
     # Overall objective across the combined configuration
@@ -342,5 +355,6 @@ def generate(students: List[dict], weights: Dict[str, int],
     result_teams = [[students[i] for i in team] for team in all_teams]
     return GenerationResult(
         result_teams, [len(t) for t in all_teams], seed, obj, dict(weights),
-        {"n": n, "iterations": iterations, "cannot_pairs": len(cons.cannot_pairs),
+        {"n": n, "iterations": iterations, "method": method,
+         "cannot_pairs": len(cons.cannot_pairs),
          "must_pairs": len(cons.must_pairs), "sections": len(blocks)})

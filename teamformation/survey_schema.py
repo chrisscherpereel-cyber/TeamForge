@@ -203,6 +203,7 @@ def blank_response() -> Dict:
         "skills": {k: None for k in SKILLS}, "roles": [], "leadership": None,
         "workstyle": {k: None for k in WORKSTYLE},
         "effort": None, "pace": None, "response_time": None,
-        "prev_teammates": "", "preferred_teammate": "",
-        "has_concern": False, "concern_text": "", "other_info": "",
+        "prev_teammates": [], "preferred_teammate": "",
+        "has_concern": False, "concern_student": "", "concern_text": "",
+        "other_info": "",
     }

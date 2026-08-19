@@ -16,6 +16,15 @@ from ..optimizer import generate, team_size_distribution
 from ..ingest import name_key
 
 
+# Formation methods offered in the dropdown (label -> optimizer method key).
+_METHODS = {
+    "Multiple linear regression (weighted-criteria model)": "linear",
+    "Weighted linear model — hill climbing": "hill",
+    "Greedy construction (fast)": "greedy",
+    "Random baseline": "random",
+}
+
+
 # --------------------------------------------------------------------------- #
 def _dstate(ctx):
     return st.session_state.setdefault(f"design::{ctx.slug}", {})
@@ -97,8 +106,20 @@ def render(ctx):
 
     fsvc.save_config(ctx.vault, ctx.slug, cfg)
 
-    # ---- Generate --------------------------------------------------------
+    # ---- Method + Generate ----------------------------------------------
     st.markdown("##### Generate")
+    method_label = st.selectbox(
+        "Formation method", list(_METHODS.keys()),
+        index=list(_METHODS.values()).index(cfg.get("method", "linear"))
+        if cfg.get("method", "linear") in _METHODS.values() else 0,
+        help="All methods optimize the same weighted-criteria (linear) objective built "
+             "from your weights above — think of each weight as a coefficient. "
+             "‘Multiple linear regression’ optimizes that linear model globally with "
+             "simulated annealing; hill climbing is a faster local search; greedy and "
+             "random are quick baselines. (A true regression would need a measured team "
+             "outcome to train on, which a fresh roster doesn't have — so the linear "
+             "weighted-criteria model is the working equivalent.)")
+    cfg["method"] = _METHODS[method_label]
     g1, g2, g3 = st.columns([1, 1, 2])
     seed_in = g3.number_input("Random seed (0 = new each time)", 0, 2**31 - 1,
                               int(cfg.get("seed", 0) or 0))
@@ -109,11 +130,19 @@ def render(ctx):
 
     design = _dstate(ctx)
     if not design.get("teams"):
+        saved = fsvc.load_proposed(ctx.vault, ctx.slug)
+        hydrated = fsvc.rehydrate_proposed(saved, students) if saved else None
+        if hydrated:
+            st.session_state[f"design::{ctx.slug}"] = hydrated
+            design = hydrated
+            st.caption("Restored your last proposed teams from storage.")
+    if not design.get("teams"):
         st.info("Set your structure and criteria, then generate teams.")
         return
 
     # keep the proposal current with any roster changes (assign new students)
     _reconcile_unassigned(design, students)
+    fsvc.save_proposed(ctx.vault, ctx.slug, design)   # persist so a reload restores it
 
     weights = cfg["weights"]
     cannot = {frozenset({name_key(a), name_key(b)}) for a, b in cfg.get("cannot_pairs", [])}
@@ -131,7 +160,8 @@ def render(ctx):
 # --------------------------------------------------------------------------- #
 def _generate(ctx, students, cfg, sizes, mode, seed, fresh):
     kwargs = dict(cannot_pairs=cfg.get("cannot_pairs"), must_pairs=cfg.get("must_pairs"),
-                  same_section_only=cfg.get("same_section_only", False), seed=seed)
+                  same_section_only=cfg.get("same_section_only", False), seed=seed,
+                  method=cfg.get("method", "linear"))
     if mode == "Team size":
         kwargs["size"] = cfg["team_size"]
     else:
@@ -145,6 +175,7 @@ def _generate(ctx, students, cfg, sizes, mode, seed, fresh):
     d["seed"] = res.seed
     cfg["seed"] = res.seed
     fsvc.save_config(ctx.vault, ctx.slug, cfg)
+    fsvc.save_proposed(ctx.vault, ctx.slug, d)
     st.success(f"Generated {len(res.teams)} teams (seed {res.seed}, score {res.objective}/100).")
 
 
@@ -172,14 +203,16 @@ def _render_diagnostics(design, weights, seed=None):
     parsed = _parsed(design)
     diag = scoring.configuration_diagnostics(parsed, weights)
     st.markdown("##### Formation quality")
-    st.metric("Overall formation score", f"{diag['overall']} / 100")
+    st.metric("Overall formation score", f"{diag['overall']} / 100",
+              help=scoring.OVERALL_HELP)
     comps = diag["components"]
     if comps:
         items = list(comps.items())
         cols = st.columns(min(4, len(items)))
         for i, (k, v) in enumerate(items):
             crit = scoring.CRITERIA.get(k)
-            cols[i % len(cols)].metric(crit.label if crit else k, f"{v}")
+            cols[i % len(cols)].metric(crit.label if crit else k, f"{v}",
+                                       help=scoring.CRITERION_HELP.get(k))
     # warnings
     warns = []
     for i, team in enumerate(parsed):
@@ -319,7 +352,8 @@ def _render_manual(ctx, design, students):
                            locked_teams=[i for i, v in enumerate(design["locked_teams"]) if v],
                            locked_assignments=locked_assignments,
                            cannot_pairs=cfg.get("cannot_pairs"),
-                           must_pairs=cfg.get("must_pairs"), seed=None)
+                           must_pairs=cfg.get("must_pairs"), seed=None,
+                           method=cfg.get("method", "linear"))
             design["teams"] = [list(t) for t in res.teams]
             st.success(f"Regenerated unlocked students (score {res.objective}/100).")
             st.rerun()

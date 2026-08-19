@@ -6,7 +6,11 @@ import datetime as dt
 import streamlit as st
 
 from .. import survey_service as svc
-from ..survey_schema import MAJORS
+from ..survey_schema import (
+    MAJORS, STANDINGS, SUBJECT_EXPERIENCE, WORK_EXPERIENCE, MEETING_FORMAT,
+    TIMEZONES, DAYS, TIME_BLOCKS, WEEKLY_TIME, SKILLS, SKILL_SCALE, ROLES,
+    LEADERSHIP, WORKSTYLE, WORKSTYLE_SCALE, EFFORT, PACE, RESPONSE_TIME,
+)
 
 _TOGGLES = [
     ("ask_section", "Course section"),
@@ -32,6 +36,63 @@ _TOGGLES = [
 ]
 
 
+def _render_preview(cur):
+    """Read-only rendering of the active survey questions and answer options."""
+    def q(num, text, options=None):
+        st.markdown(f"**Q{num}. {text}**")
+        if options:
+            st.markdown("\n".join(f"- {o}" for o in options))
+
+    st.caption(cur.get("intro", ""))
+    n = 1
+    q(n, "Full name"); n += 1
+    q(n, "Course email address"); n += 1
+    if cur.get("ask_section", True):
+        q(n, "Course section or class meeting time"); n += 1
+    if cur.get("ask_major", True):
+        q(n, "Primary academic major or field", cur.get("majors", MAJORS)); n += 1
+    if cur.get("ask_standing", True):
+        q(n, "Current academic standing", STANDINGS); n += 1
+    if cur.get("ask_subject_exp", True):
+        q(n, "Relevant subject-matter experience", SUBJECT_EXPERIENCE); n += 1
+    if cur.get("ask_work_exp", True):
+        q(n, "Work/organizational experience", WORK_EXPERIENCE); n += 1
+    if cur.get("ask_meeting_format", True):
+        q(n, "Preferred meeting format", MEETING_FORMAT); n += 1
+    if cur.get("ask_timezone", True):
+        q(n, "Time zone", TIMEZONES); n += 1
+    if cur.get("ask_availability", True):
+        q(n, "Weekly availability (select blocks per day)",
+          [f"Days: {', '.join(DAYS)}", f"Blocks: {', '.join(TIME_BLOCKS)}"]); n += 1
+    if cur.get("ask_weekly_time", True):
+        q(n, "Weekly time available for team work", WEEKLY_TIME); n += 1
+    if cur.get("ask_skills", True):
+        q(n, "Rate current capability (1-5) in each area:",
+          list(SKILLS.values()) + [f"Scale: {', '.join(SKILL_SCALE)}"]); n += 1
+    if cur.get("ask_roles", True):
+        q(n, "Preferred contribution roles (up to 3)", ROLES); n += 1
+    if cur.get("ask_leadership", True):
+        q(n, "Leadership preference", LEADERSHIP); n += 1
+    if cur.get("ask_workstyle", True):
+        q(n, "Work-style statements (1 Strongly disagree - 5 Strongly agree):",
+          list(WORKSTYLE.values())); n += 1
+    if cur.get("ask_effort", True):
+        q(n, "Desired effort/performance level", EFFORT); n += 1
+    if cur.get("ask_pace", True):
+        q(n, "Natural work pace", PACE); n += 1
+    if cur.get("ask_response_time", True):
+        q(n, "Expected communication response time", RESPONSE_TIME); n += 1
+    if cur.get("ask_prev_teammates", True):
+        q(n, "Previous teammates (choose up to 3 classmates from the roster)"); n += 1
+    if cur.get("ask_preferred_teammate", True):
+        q(n, "Preferred teammate (choose one classmate from the roster — optional)"); n += 1
+    if cur.get("ask_concern", True):
+        q(n, "Serious placement concern? (Yes/No; if Yes, choose the classmate and "
+          "explain — instructor-only)"); n += 1
+    if cur.get("ask_other_info", True):
+        q(n, "Other relevant non-sensitive information (optional)"); n += 1
+
+
 def render(ctx):
     vault = ctx.vault
     st.subheader("Survey setup")
@@ -39,6 +100,9 @@ def render(ctx):
         st.info("Choose a course in the sidebar first.")
         return
     cur = svc.load_survey(vault, ctx.slug)
+
+    with st.expander("👁 Preview the survey as students will see it", expanded=True):
+        _render_preview(cur)
 
     with st.expander("Wording", expanded=False):
         cur["title"] = st.text_input("Title", cur.get("title", ""))
