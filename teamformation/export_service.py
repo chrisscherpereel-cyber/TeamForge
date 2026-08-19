@@ -55,11 +55,15 @@ def _student_rows(students: List[dict], final: Optional[Dict],
             row[f"skill_{k}"] = (s.get("skills") or {}).get(k)
         for k in WORKSTYLE:
             row[f"ws_{k}"] = (s.get("workstyle") or {}).get(k)
-        row["prev_teammates"] = s.get("prev_teammates", "")
+        prev = s.get("prev_teammates", "")
+        row["prev_teammates"] = "; ".join(prev) if isinstance(prev, (list, tuple)) else prev
         row["preferred_teammate"] = s.get("preferred_teammate", "")
         if include_concern:
-            row["placement_concern"] = (s.get("concern_text", "")
-                                        if s.get("has_concern") else "")
+            if s.get("has_concern"):
+                who = s.get("concern_student", "")
+                row["placement_concern"] = (f"[{who}] " if who else "") + s.get("concern_text", "")
+            else:
+                row["placement_concern"] = ""
             row["other_info"] = s.get("other_info", "")
         rows.append(row)
     return rows

@@ -93,6 +93,7 @@ def email_send_panel(key: str, messages: List[mail.Message], cfg: AppConfig,
         return
     method = st.selectbox("How do you want to send?",
                           ["Microsoft 365 — send now", "SMTP — send now",
+                           "Download auto-send scripts (Mac / Windows)",
                            "Download .eml files", "Download recipients CSV"],
                           key=f"{key}_method")
     if method.startswith(("Microsoft", "SMTP")):
@@ -119,9 +120,20 @@ def email_send_panel(key: str, messages: List[mail.Message], cfg: AppConfig,
                 if res["failed"]:
                     import pandas as pd
                     st.dataframe(pd.DataFrame(res["failed"]))
+    elif method.startswith("Download auto-send"):
+        from . import emailpack
+        if st.button("Build auto-send scripts", key=f"{key}_auto"):
+            st.session_state[f"{key}_autobytes"] = emailpack.send_all_pack(messages, label)
+        if st.session_state.get(f"{key}_autobytes"):
+            st.download_button("⬇ Download auto-send zip", st.session_state[f"{key}_autobytes"],
+                               f"{label}_autosend.zip", "application/zip")
+            st.caption("Unzip, then **double-click** `Send emails (Windows).cmd` on Windows "
+                       "or `send_all_mac.applescript` on Mac. Sends from your own "
+                       "Outlook / Apple Mail — no server setup needed.")
     elif method.startswith("Download .eml"):
+        from . import emailpack
         if st.button("Build .eml zip", key=f"{key}_eml"):
-            st.session_state[f"{key}_emlbytes"] = eml_zip(messages, cfg.email.sender)
+            st.session_state[f"{key}_emlbytes"] = emailpack.eml_zip(messages, label)
         if st.session_state.get(f"{key}_emlbytes"):
             st.download_button("⬇ Download .eml zip", st.session_state[f"{key}_emlbytes"],
                                f"{label}_eml.zip", "application/zip")
