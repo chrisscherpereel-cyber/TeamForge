@@ -260,13 +260,23 @@ class PCloudBackend:
 # --------------------------------------------------------------------------- #
 def _make_backend(cfg: VaultConfig) -> StorageBackend:
     b = cfg.backend.lower()
-    if b == "m365":
-        return M365Backend(cfg.folder, cfg.options)
-    if b == "dropbox":
-        return DropboxBackend(cfg.folder, cfg.options)
-    if b == "pcloud":
-        return PCloudBackend(cfg.folder, cfg.options)
-    return LocalBackend(cfg.folder)
+    try:
+        if b == "m365":
+            return M365Backend(cfg.folder, cfg.options)
+        if b == "dropbox":
+            return DropboxBackend(cfg.folder, cfg.options)
+        if b == "pcloud":
+            return PCloudBackend(cfg.folder, cfg.options)
+        return LocalBackend(cfg.folder)
+    except ModuleNotFoundError as exc:
+        # An optional backend library isn't installed. Fail with guidance rather
+        # than a raw traceback at login.
+        raise RuntimeError(
+            f"Storage backend '{b}' is selected in secrets, but its Python package "
+            f"isn't installed ({exc.name}). Either add '{exc.name}' to requirements.txt "
+            f"and redeploy, or change [vault] backend in your secrets to 'm365' or "
+            f"'local'."
+        ) from exc
 
 
 class Vault:

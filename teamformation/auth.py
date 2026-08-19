@@ -47,7 +47,11 @@ def require_login() -> bool:
         submitted = st.form_submit_button("Sign in")
 
     if submitted:
-        u = accounts.authenticate(username, pw, cfg)
+        try:
+            u = accounts.authenticate(username, pw, cfg)
+        except Exception as exc:  # noqa: BLE001  (e.g. misconfigured storage backend)
+            st.error(f"Sign-in couldn't reach storage: {exc}")
+            return False
         if u:
             st.session_state["pp_user"] = u
             st.rerun()
