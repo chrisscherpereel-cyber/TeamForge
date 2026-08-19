@@ -180,6 +180,12 @@ DEFAULT_SURVEY: Dict = {
     # Editable category lists
     "majors": list(MAJORS),
 
+    # Instructor-defined custom questions (collected in an "Additional questions"
+    # section). Each: {id, label, type, options[], required}. type is one of
+    # CUSTOM_TYPES below.
+    "custom_questions": [],
+    "custom_seq": 0,
+
     # Scheduling
     "is_open": True,
     "opens_at": "",
@@ -189,6 +195,18 @@ DEFAULT_SURVEY: Dict = {
     "allow_edit": True,
     # Whether students may view their released team assignment inside the app
     "release_teams": False,
+}
+
+
+# Custom-question types: key -> (instructor-facing label, needs_options?)
+CUSTOM_TYPES: Dict[str, tuple] = {
+    "text": ("Short text", False),
+    "textarea": ("Paragraph text", False),
+    "radio": ("Multiple choice (pick one)", True),
+    "select": ("Dropdown (pick one)", True),
+    "multiselect": ("Checkboxes (pick many)", True),
+    "number": ("Number", False),
+    "scale5": ("1–5 rating scale", False),
 }
 
 
@@ -205,5 +223,5 @@ def blank_response() -> Dict:
         "effort": None, "pace": None, "response_time": None,
         "prev_teammates": [], "preferred_teammate": "",
         "has_concern": False, "concern_student": "", "concern_text": "",
-        "other_info": "",
+        "other_info": "", "custom": {},
     }

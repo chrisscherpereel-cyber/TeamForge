@@ -9,7 +9,7 @@ import streamlit as st
 from .. import survey_service as svc
 from .. import ingest
 from ..survey_service import token_secret, student_links, build_students
-from ..ui_helpers import email_send_panel
+from ..ui_helpers import email_send_panel, email_body_editor
 from .. import email_delivery as mail
 
 _TEMPLATE_COLS = ["First Name", "Last Name", "Email", "Section"]
@@ -82,9 +82,15 @@ def render(ctx):
     if snap and snap.get("students"):
         students = snap["students"]
         st.markdown(f"##### Saved roster — {len(students)} student(s)")
-        rdf = pd.DataFrame(students)
-        cols = [c for c in ["name", "email", "section", "excluded"] if c in rdf.columns]
-        st.dataframe(rdf[cols], use_container_width=True, height=280)
+        st.caption("Recalled automatically from storage — all previously uploaded "
+                   "information is preserved.")
+        disp = []
+        for s in students:
+            row = {"name": s.get("name", ""), "email": s.get("email", ""),
+                   "section": s.get("section", ""), "excluded": s.get("excluded", False)}
+            row.update(s.get("extra", {}))   # preserved extra columns
+            disp.append(row)
+        st.dataframe(pd.DataFrame(disp), use_container_width=True, height=280)
         no_email = [m["name"] for m in students if not m.get("email")]
         if no_email:
             st.warning(f"{len(no_email)} student(s) have no email and can't be emailed a "
@@ -121,8 +127,9 @@ def render(ctx):
         st.dataframe(pd.DataFrame(links)[["name", "email", "link"]],
                      use_container_width=True, height=260)
     subj = st.text_input("Email subject", "Team-formation survey for {class}", key="inv_subj")
-    body = st.text_area("Email body (HTML). Placeholders: {first_name}, {class}, {link}",
-                        DEFAULT_INVITE, height=200, key="inv_body")
+    _sample = {"first_name": "Alex", "name": "Alex Johnson", "class": ctx.course,
+               "link": (links[0]["link"] if links else "https://…")}
+    body = email_body_editor("inv_body", DEFAULT_INVITE, _sample)
     if not base_url.strip():
         st.warning("Enter the public app URL so the links have a destination.")
     messages = []

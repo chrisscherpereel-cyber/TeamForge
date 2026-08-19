@@ -7,7 +7,7 @@ import streamlit as st
 from .. import survey_service as svc
 from ..survey_service import token_secret
 from ..tokens import make_token
-from ..ui_helpers import email_send_panel
+from ..ui_helpers import email_send_panel, email_body_editor
 from .. import email_delivery as mail
 
 REMINDER = (
@@ -78,7 +78,9 @@ def render(ctx):
                                  key="rem_url")
         subj = st.text_input("Subject", "Reminder: team-formation survey for {class}",
                              key="rem_subj")
-        body = st.text_area("Body (HTML)", REMINDER, height=160, key="rem_body")
+        body = email_body_editor("rem_body", REMINDER,
+                                 {"first_name": "Alex", "class": ctx.course,
+                                  "link": "https://…"})
         secret = token_secret(ctx.cfg)
         sep = "&" if "?" in (base_url or "") else "?"
         messages = []

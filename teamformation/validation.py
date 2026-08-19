@@ -79,4 +79,19 @@ def submission_problems(answers: Dict, survey_cfg: Dict) -> List[str]:
         problems.append("You marked a placement concern — please describe it, or "
                         "change your answer to “No”.")
 
+    problems.extend(custom_problems(answers, survey_cfg))
     return problems
+
+
+def custom_problems(answers: Dict, survey_cfg: Dict) -> List[str]:
+    """Required custom questions must be answered."""
+    out = []
+    custom = answers.get("custom") or {}
+    for q in survey_cfg.get("custom_questions", []) or []:
+        if not q.get("required"):
+            continue
+        v = custom.get(q.get("id"))
+        empty = v in (None, "", []) or (isinstance(v, (list, tuple)) and not v)
+        if empty:
+            out.append(f"Answer: {q.get('label', 'custom question')}.")
+    return out

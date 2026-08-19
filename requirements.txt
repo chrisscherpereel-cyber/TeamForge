@@ -6,7 +6,8 @@ openpyxl>=3.1          # Excel export
 cryptography>=42.0     # Fernet encryption of all PII at rest
 requests>=2.32         # Graph / Dropbox / pCloud REST
 msal>=1.28             # Microsoft 365 (Graph) auth
-dropbox>=11.36        # Dropbox storage backend
+dropbox>=11.36         # Dropbox storage backend
+streamlit-quill>=0.0.3 # WYSIWYG email editor (falls back to a plain box if absent)
 
 # Testing only:
 # pytest>=8.0

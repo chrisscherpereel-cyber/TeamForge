@@ -36,6 +36,91 @@ _TOGGLES = [
 ]
 
 
+def _opts(prefix, options):
+    return prefix + "\n" + "\n".join(f"- {o}" for o in options)
+
+
+def _block_help(cur):
+    """Per-block (?) tooltip text: the exact question and its answer choices."""
+    return {
+        "ask_section": "Course section or class meeting time (short text).",
+        "ask_major": _opts("Primary academic major or field. Choices:",
+                           cur.get("majors", MAJORS)),
+        "ask_standing": _opts("Current academic standing. Choices:", STANDINGS),
+        "ask_subject_exp": _opts("Relevant subject-matter experience:", SUBJECT_EXPERIENCE),
+        "ask_work_exp": _opts("Work/organizational experience:", WORK_EXPERIENCE),
+        "ask_meeting_format": _opts("Preferred meeting format:", MEETING_FORMAT),
+        "ask_timezone": _opts("Time zone:", TIMEZONES),
+        "ask_availability": ("Weekly availability matrix.\nDays: " + ", ".join(DAYS)
+                             + "\nBlocks: " + ", ".join(TIME_BLOCKS)),
+        "ask_weekly_time": _opts("Weekly time available for team work:", WEEKLY_TIME),
+        "ask_skills": _opts("Rate current capability 1–5 in each of:",
+                            list(SKILLS.values())),
+        "ask_roles": _opts("Preferred contribution roles (pick up to 3):", ROLES),
+        "ask_leadership": _opts("Leadership preference:", LEADERSHIP),
+        "ask_workstyle": _opts("Work-style statements (1 Strongly disagree – 5 Strongly agree):",
+                               list(WORKSTYLE.values())),
+        "ask_effort": _opts("Desired effort/performance level:", EFFORT),
+        "ask_pace": _opts("Natural work pace:", PACE),
+        "ask_response_time": _opts("Expected communication response time:", RESPONSE_TIME),
+        "ask_prev_teammates": "Choose up to three previous teammates from the roster.",
+        "ask_preferred_teammate": "Choose one preferred teammate from the roster (optional).",
+        "ask_concern": ("Serious placement concern? Yes/No. If Yes, the student picks the "
+                        "classmate involved and explains — visible only to you."),
+        "ask_other_info": "Optional non-sensitive free text.",
+    }
+
+
+def _custom_editor(ctx, cur):
+    from ..survey_schema import CUSTOM_TYPES
+    with st.expander(f"➕ Custom questions ({len(cur.get('custom_questions', []))})"):
+        st.caption("Add your own questions to collect extra information. Answers appear in "
+                   "the exports; they don't affect team formation.")
+        # existing questions
+        for q in list(cur.get("custom_questions", [])):
+            c1, c2 = st.columns([5, 1])
+            tlabel = CUSTOM_TYPES.get(q.get("type", "text"), ("?", False))[0]
+            req = " · required" if q.get("required") else ""
+            c1.write(f"**{q.get('label','(untitled)')}** — {tlabel}{req}"
+                     + (f"  \nChoices: {', '.join(q.get('options', []))}"
+                        if q.get("options") else ""))
+            if c2.button("Remove", key=f"cq_rm_{q['id']}"):
+                cur["custom_questions"] = [x for x in cur["custom_questions"]
+                                           if x["id"] != q["id"]]
+                _persist(ctx, cur)
+                st.rerun()
+        st.markdown("**Add a question**")
+        label = st.text_input("Question text", key="cq_new_label")
+        type_labels = {v[0]: k for k, v in CUSTOM_TYPES.items()}
+        tlabel = st.selectbox("Answer type", list(type_labels.keys()), key="cq_new_type")
+        qtype = type_labels[tlabel]
+        needs_opts = CUSTOM_TYPES[qtype][1]
+        options = []
+        if needs_opts:
+            otext = st.text_area("Answer choices (one per line)", key="cq_new_opts")
+            options = [ln.strip() for ln in otext.splitlines() if ln.strip()]
+        required = st.checkbox("Required", value=False, key="cq_new_req")
+        if st.button("Add question", key="cq_add"):
+            if not label.strip():
+                st.error("Enter the question text.")
+            elif needs_opts and not options:
+                st.error("This answer type needs at least one choice.")
+            else:
+                seq = int(cur.get("custom_seq", 0)) + 1
+                cur["custom_seq"] = seq
+                cur.setdefault("custom_questions", []).append({
+                    "id": f"cq_{seq}", "label": label.strip(), "type": qtype,
+                    "options": options, "required": bool(required)})
+                _persist(ctx, cur)
+                st.success(f"Added “{label.strip()}”.")
+                st.rerun()
+
+
+def _persist(ctx, cur):
+    from ..survey_service import key_survey, _save_json
+    _save_json(ctx.vault, key_survey(ctx.slug), cur)
+
+
 def _render_preview(cur):
     """Read-only rendering of the active survey questions and answer options."""
     def q(num, text, options=None):
@@ -91,6 +176,9 @@ def _render_preview(cur):
           "explain — instructor-only)"); n += 1
     if cur.get("ask_other_info", True):
         q(n, "Other relevant non-sensitive information (optional)"); n += 1
+    for cq in cur.get("custom_questions", []) or []:
+        q(n, cq.get("label", "") + ("  *(required)*" if cq.get("required") else ""),
+          cq.get("options")); n += 1
 
 
 def render(ctx):
@@ -101,7 +189,7 @@ def render(ctx):
         return
     cur = svc.load_survey(vault, ctx.slug)
 
-    with st.expander("👁 Preview the survey as students will see it", expanded=True):
+    with st.expander("👁 Full survey preview (as students will see it)", expanded=False):
         _render_preview(cur)
 
     with st.expander("Wording", expanded=False):
@@ -110,15 +198,20 @@ def render(ctx):
 
     with st.expander("Question blocks — turn each on or off", expanded=True):
         st.caption("Switch a block off and students won't see it; the optimizer simply "
-                   "skips criteria with no data.")
+                   "skips criteria with no data. **Hover the (?) beside a block to preview "
+                   "its exact question and answer choices.**")
+        helpmap = _block_help(cur)
         cols = st.columns(2)
         for i, (key, label) in enumerate(_TOGGLES):
-            cur[key] = cols[i % 2].checkbox(label, value=cur.get(key, True), key=f"t_{key}")
+            cur[key] = cols[i % 2].checkbox(label, value=cur.get(key, True), key=f"t_{key}",
+                                            help=helpmap.get(key))
 
     with st.expander("Academic major categories (editable)"):
         text = st.text_area("One major per line", "\n".join(cur.get("majors", MAJORS)),
                             height=200)
         cur["majors"] = [ln.strip() for ln in text.splitlines() if ln.strip()]
+
+    _custom_editor(ctx, cur)
 
     st.markdown("##### Availability & release")
     c1, c2 = st.columns(2)

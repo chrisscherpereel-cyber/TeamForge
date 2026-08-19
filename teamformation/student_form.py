@@ -282,6 +282,40 @@ def _sec_history(A, survey):
             A.get("other_info", ""), height=90)
 
 
+def _sec_custom(A, survey):
+    st.caption("A few additional questions from your instructor.")
+    custom = dict(A.get("custom") or {})
+    for q in survey.get("custom_questions", []) or []:
+        qid, label, qtype = q.get("id"), q.get("label", ""), q.get("type", "text")
+        opts = q.get("options", []) or []
+        req = " *" if q.get("required") else ""
+        cur = custom.get(qid)
+        if qtype == "text":
+            custom[qid] = st.text_input(label + req, value=str(cur or ""), key=f"cq_{qid}")
+        elif qtype == "textarea":
+            custom[qid] = st.text_area(label + req, value=str(cur or ""), key=f"cq_{qid}")
+        elif qtype == "number":
+            custom[qid] = st.text_input(label + req + "  (number)", value=str(cur or ""),
+                                        key=f"cq_{qid}")
+        elif qtype in ("radio", "select"):
+            idx = opts.index(cur) if cur in opts else None
+            if qtype == "radio":
+                custom[qid] = st.radio(label + req, opts, index=idx, key=f"cq_{qid}")
+            else:
+                custom[qid] = st.selectbox(label + req, [""] + opts,
+                                           index=(opts.index(cur) + 1 if cur in opts else 0),
+                                           key=f"cq_{qid}")
+        elif qtype == "multiselect":
+            default = [c for c in (cur or []) if c in opts]
+            custom[qid] = st.multiselect(label + req, opts, default=default, key=f"cq_{qid}")
+        elif qtype == "scale5":
+            choice = st.radio(label + req, ["1", "2", "3", "4", "5"],
+                              index=(int(cur) - 1 if str(cur).isdigit() and 1 <= int(cur) <= 5
+                                     else None), horizontal=True, key=f"cq_{qid}")
+            custom[qid] = int(choice) if choice else None
+    A["custom"] = custom
+
+
 def _sec_review(A, survey):
     st.caption("Review your answers below, then submit. You can go Back to change anything.")
     problems = submission_problems(A, survey)
@@ -323,6 +357,8 @@ def _active_pages(survey):
     if any(survey.get(f, True) for f in ("ask_prev_teammates", "ask_preferred_teammate",
                                          "ask_concern", "ask_other_info")):
         pages.append(("history", "Team history & preferences", _sec_history))
+    if survey.get("custom_questions"):
+        pages.append(("custom", "Additional questions", _sec_custom))
     pages.append(("review", "Review & submit", _sec_review))
     return pages
 

@@ -84,6 +84,33 @@ def eml_zip(messages: List[mail.Message], sender: str = "") -> bytes:
     return buf.getvalue()
 
 
+def email_body_editor(key: str, default_html: str, sample_ctx: dict,
+                      height: int = 200) -> str:
+    """A WYSIWYG-style email body editor with a live rendered preview.
+
+    Uses the streamlit-quill rich-text editor when it's installed; otherwise falls
+    back to an HTML text box. Either way, a live preview underneath shows exactly
+    how the message will look with sample values substituted, so the instructor
+    edits against a real rendering rather than raw HTML.
+    """
+    st.caption("Placeholders like {first_name}, {team}, {members}, {class}, {link} are "
+               "filled in per student when sent.")
+    html = None
+    try:
+        from streamlit_quill import st_quill
+        html = st_quill(value=st.session_state.get(f"{key}_html", default_html),
+                        html=True, key=f"{key}_quill")
+        html = html or default_html
+    except Exception:
+        html = st.text_area("Email body", st.session_state.get(f"{key}_html", default_html),
+                            height=height, key=f"{key}_ta")
+    st.session_state[f"{key}_html"] = html
+    with st.container(border=True):
+        st.caption("Live preview")
+        st.markdown(mail.render_template(html, sample_ctx), unsafe_allow_html=True)
+    return html
+
+
 def email_send_panel(key: str, messages: List[mail.Message], cfg: AppConfig,
                      csv_rows=None, label: str = "emails") -> None:
     """Reusable delivery UI: Microsoft 365 / SMTP send, or offline packs.

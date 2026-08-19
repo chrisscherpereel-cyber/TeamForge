@@ -7,6 +7,23 @@ checks quality diagnostics, finalizes, and emails each student their assignment.
 The instructor keeps final control throughout — the algorithm assists, it does
 not decide.
 
+### What's new in v1.2
+
+- **WYSIWYG email editing** — every email body (survey links, reminders, team
+  assignments) now has a rich-text editor (when `streamlit-quill` is installed)
+  with a **live rendered preview** showing exactly how the message will look with
+  sample values filled in.
+- **Question previews behind (?)** — each question block in Survey setup has a (?)
+  tooltip showing that block's exact question and answer choices (a full preview
+  is still available, collapsed).
+- **Custom questions** — add your own survey questions (short text, paragraph,
+  multiple choice, dropdown, checkboxes, number, 1–5 scale), required or optional;
+  they appear in an "Additional questions" section for students and as columns in
+  the exports.
+- **Full class-list recall** — importing a roster now preserves *every* uploaded
+  column (student ID, GPA, anything), and selecting a course automatically recalls
+  the complete saved class list with all of that information intact.
+
 ### What's new in v1.1
 
 - **Roster persistence** — importing a roster now saves it to the vault

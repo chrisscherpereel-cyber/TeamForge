@@ -35,8 +35,15 @@ def _avail_count(rec: dict) -> int:
 
 
 def _student_rows(students: List[dict], final: Optional[Dict],
-                  include_concern: bool) -> List[dict]:
+                  include_concern: bool, custom_defs: Optional[List[dict]] = None) -> List[dict]:
     team_of = _team_of(final)
+    custom_defs = custom_defs or []
+    # stable set of extra roster columns across all students
+    extra_keys = []
+    for s in students:
+        for k in (s.get("extra") or {}):
+            if k not in extra_keys:
+                extra_keys.append(k)
     rows = []
     for s in students:
         row = {
@@ -65,6 +72,16 @@ def _student_rows(students: List[dict], final: Optional[Dict],
             else:
                 row["placement_concern"] = ""
             row["other_info"] = s.get("other_info", "")
+        # preserved roster columns
+        extra = s.get("extra") or {}
+        for k in extra_keys:
+            row[f"info_{k}"] = extra.get(k, "")
+        # custom-question answers (keyed by label)
+        custom = s.get("custom") or {}
+        for q in custom_defs:
+            v = custom.get(q.get("id"))
+            row[q.get("label", q.get("id"))] = ("; ".join(map(str, v))
+                                                if isinstance(v, (list, tuple)) else v)
         rows.append(row)
     return rows
 
@@ -72,9 +89,11 @@ def _student_rows(students: List[dict], final: Optional[Dict],
 # --------------------------------------------------------------------------- #
 # CSV exports
 # --------------------------------------------------------------------------- #
-def student_dataset_csv(students: List[dict], final: Optional[Dict]) -> str:
+def student_dataset_csv(students: List[dict], final: Optional[Dict],
+                        custom_defs: Optional[List[dict]] = None) -> str:
     """Full instructor-facing student dataset (includes placement concern)."""
-    df = pd.DataFrame(_student_rows(students, final, include_concern=True))
+    df = pd.DataFrame(_student_rows(students, final, include_concern=True,
+                                    custom_defs=custom_defs))
     return df.to_csv(index=False)
 
 
@@ -105,7 +124,7 @@ def student_facing_csv(final: Dict, include_email: bool = True) -> str:
 # --------------------------------------------------------------------------- #
 def workbook_xlsx(course: str, label: str, students: List[dict],
                   final: Optional[Dict], diagnostics: Optional[Dict],
-                  config: Optional[Dict]) -> bytes:
+                  config: Optional[Dict], custom_defs: Optional[List[dict]] = None) -> bytes:
     from . import scoring
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as xl:
@@ -121,7 +140,8 @@ def workbook_xlsx(course: str, label: str, students: List[dict],
                      ).to_excel(xl, sheet_name="Final Teams", index=False)
 
         # Student Responses (instructor-facing, includes concern)
-        pd.DataFrame(_student_rows(students, final, include_concern=True)
+        pd.DataFrame(_student_rows(students, final, include_concern=True,
+                                   custom_defs=custom_defs)
                      ).to_excel(xl, sheet_name="Student Responses", index=False)
 
         # Team Diagnostics

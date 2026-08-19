@@ -141,8 +141,15 @@ def _contact_columns(df: pd.DataFrame):
 
 
 def build_students(contact_df: pd.DataFrame) -> List[dict]:
-    """Flat, de-duplicated, name-sorted list of student records from a roster."""
+    """Flat, de-duplicated, name-sorted list of student records from a roster.
+
+    Any columns beyond name/first/last/email/section/class are preserved verbatim
+    in each student's ``extra`` dict, so all uploaded information is retained and
+    recalled — not just the fields the app maps by name.
+    """
     full_c, first_c, last_c, email_c, section_c, class_c = _contact_columns(contact_df)
+    mapped = {c for c in (full_c, first_c, last_c, email_c, section_c, class_c) if c}
+    extra_cols = [c for c in contact_df.columns if c not in mapped]
     out: List[dict] = []
     seen = set()
     for _, row in contact_df.iterrows():
@@ -158,6 +165,11 @@ def build_students(contact_df: pd.DataFrame) -> List[dict]:
         if key in seen:
             continue
         seen.add(key)
+        extra = {}
+        for c in extra_cols:
+            v = row.get(c)
+            if pd.notna(v) and str(v).strip():
+                extra[str(c)] = str(v).strip()
         out.append({
             "name": name,
             "first": first or name.split(" ")[0],
@@ -165,6 +177,7 @@ def build_students(contact_df: pd.DataFrame) -> List[dict]:
             "email": str(row.get(email_c, "")).strip() if email_c else "",
             "section": str(row.get(section_c, "")).strip() if section_c else "",
             "excluded": False,
+            "extra": extra,
         })
     out.sort(key=lambda m: name_key(m["name"]))
     return out
@@ -202,6 +215,8 @@ def _merge_students(existing: List[dict], incoming: List[dict]) -> List[dict]:
             cur = merged[by_key[k]]
             cur["email"] = s.get("email") or cur.get("email", "")
             cur["section"] = s.get("section") or cur.get("section", "")
+            if s.get("extra"):
+                cur.setdefault("extra", {}).update(s["extra"])
         else:
             merged.append(dict(s))
     return merged
@@ -365,7 +380,8 @@ def load_students_for_formation(vault: Vault, slug: str) -> List[dict]:
             continue
         rec = {"pos": pos, "name": m["name"], "first": m.get("first", ""),
                "last": m.get("last", ""), "email": m.get("email", ""),
-               "section": m.get("section", ""), "responded": pos in responses}
+               "section": m.get("section", ""), "extra": m.get("extra", {}),
+               "responded": pos in responses}
         resp = responses.get(pos, {})
         # copy every survey field through (missing -> None/empty)
         blank = {
@@ -376,7 +392,7 @@ def load_students_for_formation(vault: Vault, slug: str) -> List[dict]:
             "workstyle": {k: None for k in WORKSTYLE}, "effort": None, "pace": None,
             "response_time": None, "prev_teammates": [], "preferred_teammate": "",
             "has_concern": False, "concern_student": "", "concern_text": "",
-            "other_info": "",
+            "other_info": "", "custom": {},
         }
         for k, default in blank.items():
             rec[k] = resp.get(k, default) if resp else default

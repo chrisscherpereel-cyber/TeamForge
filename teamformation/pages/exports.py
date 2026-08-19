@@ -25,15 +25,16 @@ def render(ctx):
         st.caption("Using the current (unfinalized) proposal for exports.")
     diag = (final or {}).get("diagnostics") or (proposed or {}).get("_diag")
     cfg = fsvc.load_config(ctx.vault, ctx.slug)
+    custom_defs = svc.load_survey(ctx.vault, ctx.slug).get("custom_questions", [])
 
     st.markdown("##### Instructor exports (include survey variables)")
     c1, c2 = st.columns(2)
     c1.download_button("⬇ Student dataset (CSV)",
-                       exp.student_dataset_csv(students, team_source),
+                       exp.student_dataset_csv(students, team_source, custom_defs),
                        f"{ctx.slug}_students.csv", "text/csv")
     c2.download_button("⬇ Full workbook (Excel)",
                        exp.workbook_xlsx(ctx.course, ctx.label, students, team_source,
-                                         diag, cfg),
+                                         diag, cfg, custom_defs),
                        f"{ctx.slug}_teamforge.xlsx",
                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
