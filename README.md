@@ -7,23 +7,6 @@ checks quality diagnostics, finalizes, and emails each student their assignment.
 The instructor keeps final control throughout — the algorithm assists, it does
 not decide.
 
-### What's new in v1.1
-
-- **Roster persistence** — importing a roster now saves it to the vault
-  immediately and the saved roster is recalled and displayed whenever you reopen
-  the course. In-progress proposed teams are also saved and restored on reload.
-- **Roster templates** in both `.xlsx` and `.csv`.
-- **Send personal links via auto-send scripts (Mac/Windows)** — the same
-  double-click Outlook/Apple Mail packs the peer-eval app offered, now for
-  survey links and team assignments (plus `.eml` and CSV options).
-- **See the survey** — a read-only preview of the exact questions in Survey setup.
-- **Formation-method dropdown** — choose how the weighted-criteria (linear)
-  objective is optimized; default *Multiple linear regression (weighted-criteria
-  model)*, with hill-climbing, greedy, and random-baseline alternatives.
-- **Roster-dropdown teammate fields** — previous teammates, preferred teammate,
-  and the placement-concern student are now chosen from the roster, not typed.
-- **Explained metrics** — every Formation-quality metric has a (?) tooltip.
-
 It is a refactor of an existing Streamlit **peer-evaluation** application
 (PeerParley). The proven infrastructure was reused wholesale — instructor
 accounts and login, the encrypted pluggable storage vault, tokenized
