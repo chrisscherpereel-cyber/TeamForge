@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.streamlit/secrets.toml
+vault_cache/
+.pytest_cache/
+*.ppj
+*.ppx
