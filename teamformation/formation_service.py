@@ -59,10 +59,6 @@ def key_final(slug: str) -> str:
     return f"final__{slug}.ppj"
 
 
-def key_proposed(slug: str) -> str:
-    return f"proposed__{slug}.ppj"
-
-
 def _save_json(vault: Vault, name: str, obj) -> None:
     vault.put_bytes(name, json.dumps(obj, default=str, ensure_ascii=False).encode("utf-8"))
 
@@ -78,7 +74,6 @@ def default_config() -> Dict:
     return {
         "preset": "Balanced Teams",
         "weights": scoring.default_weights(),
-        "method": "linear",            # optimizer method (see optimizer.generate)
         "structure_mode": "size",      # "size" | "num_teams"
         "team_size": 4,
         "num_teams": 0,
@@ -143,54 +138,6 @@ def finalize(vault: Vault, slug: str, team_records: List[Dict],
     }
     _save_json(vault, key_final(slug), record)
     return record
-
-
-def save_proposed(vault: Vault, slug: str, design: Dict) -> None:
-    """Persist the in-progress (unfinalized) design so a reload can restore it.
-    Stores stable roster positions, not full survey records."""
-    assignment = [[m.get("pos") for m in team] for team in design.get("teams", [])]
-    _save_json(vault, key_proposed(slug), {
-        "assignment": assignment,
-        "names": design.get("names", []),
-        "locked_teams": design.get("locked_teams", []),
-        "locked_students": design.get("locked_students", {}),
-        "seed": design.get("seed"),
-    })
-
-
-def load_proposed(vault: Vault, slug: str) -> Optional[Dict]:
-    try:
-        return _load_json(vault, key_proposed(slug))
-    except Exception:
-        return None
-
-
-def rehydrate_proposed(saved: Dict, active_students: list) -> Optional[Dict]:
-    """Rebuild a design dict (teams of full student records) from a saved
-    position-based assignment and the current active roster."""
-    if not saved:
-        return None
-    by_pos = {s.get("pos"): s for s in active_students}
-    teams = []
-    for team in saved.get("assignment", []):
-        teams.append([by_pos[p] for p in team if p in by_pos])
-    if not any(teams):
-        return None
-    names = saved.get("names") or [f"Team {i+1}" for i in range(len(teams))]
-    locked = saved.get("locked_teams") or [False] * len(teams)
-    # ensure lengths line up with rebuilt teams
-    names = (names + [f"Team {i+1}" for i in range(len(teams))])[:len(teams)]
-    locked = (list(locked) + [False] * len(teams))[:len(teams)]
-    return {"teams": teams, "names": names, "locked_teams": locked,
-            "locked_students": saved.get("locked_students", {}),
-            "seed": saved.get("seed")}
-
-
-def clear_proposed(vault: Vault, slug: str) -> None:
-    try:
-        vault.delete(key_proposed(slug))
-    except Exception:
-        pass
 
 
 def load_final(vault: Vault, slug: str) -> Optional[Dict]:

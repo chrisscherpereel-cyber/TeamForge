@@ -79,9 +79,6 @@ def render_student_app(token: str) -> None:
         st.error("This link doesn't match the current roster. Contact your instructor.")
         return
     me = students[pos]
-    # classmate names (excluding self) for the roster-dropdown history questions
-    st.session_state["_tf_classmates"] = [s["name"] for i, s in enumerate(students)
-                                          if i != pos]
 
     st.header(survey.get("title", "Team Formation Profile"))
     st.caption(f"{snap.get('course', '')} · {me['name']}")
@@ -240,20 +237,15 @@ def _sec_workstyle(A, survey):
 
 
 def _sec_history(A, survey):
-    classmates = st.session_state.get("_tf_classmates", [])
     if survey.get("ask_prev_teammates", True):
-        prior = [n for n in (A.get("prev_teammates") or []) if n in classmates]
-        A["prev_teammates"] = st.multiselect(
-            "Classmates you've previously completed a substantial team project with "
-            "(choose up to three — helps avoid repeats).", classmates,
-            default=prior, max_selections=3, key="prev_ms")
+        A["prev_teammates"] = st.text_area(
+            "Up to three classmates you've previously completed a substantial team "
+            "project with (helps avoid repeats). One per line; leave blank if none.",
+            A.get("prev_teammates", ""), height=90)
     if survey.get("ask_preferred_teammate", True):
-        pref = A.get("preferred_teammate", "")
-        A["preferred_teammate"] = st.selectbox(
+        A["preferred_teammate"] = st.text_input(
             "OPTIONAL: one classmate you'd especially like to work with "
-            "(a preference, not a guarantee).", [""] + classmates,
-            index=(classmates.index(pref) + 1 if pref in classmates else 0),
-            key="pref_sb")
+            "(a preference, not a guarantee)", A.get("preferred_teammate", ""))
     if survey.get("ask_concern", True):
         A["has_concern"] = st.radio(
             "Is there a serious prior team conflict or placement issue the instructor "
@@ -263,16 +255,10 @@ def _sec_history(A, survey):
         if A["has_concern"]:
             st.caption("This response is treated as **instructor-only** information and is "
                        "never shown to other students or included in student-facing files.")
-            cs = A.get("concern_student", "")
-            A["concern_student"] = st.selectbox(
-                "Which classmate does this concern involve?", [""] + classmates,
-                index=(classmates.index(cs) + 1 if cs in classmates else 0),
-                key="concern_sb")
             A["concern_text"] = st.text_area(
-                "Briefly describe the placement concern.",
+                "Briefly describe the concern and identify the student involved.",
                 A.get("concern_text", ""), height=90)
         else:
-            A["concern_student"] = ""
             A["concern_text"] = ""
     if survey.get("ask_other_info", True):
         A["other_info"] = st.text_area(

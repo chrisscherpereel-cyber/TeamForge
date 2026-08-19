@@ -90,12 +90,8 @@ def _num(v):
 
 
 def _name_list(text) -> List[str]:
-    """Accept either a list of names (new roster-dropdown format) or free text
-    (legacy) and return normalized name keys."""
     if not text:
         return []
-    if isinstance(text, (list, tuple, set)):
-        return [name_key(str(t)) for t in text if str(t).strip()]
     parts = []
     for chunk in str(text).replace(",", "\n").splitlines():
         c = chunk.strip()
@@ -290,49 +286,6 @@ _reg("preferred", "Honor preferred teammate", PREFERENCE, 1, c_preferred)
 
 def default_weights() -> Dict[str, int]:
     return {k: c.default for k, c in CRITERIA.items()}
-
-
-# Plain-English explanations shown behind the (?) on each diagnostic metric.
-OVERALL_HELP = (
-    "A 0-100 roll-up: the size-weighted average of every active criterion below, "
-    "each weighted by the importance you set. 100 = every team scores perfectly on "
-    "every criterion you care about. It measures fit to YOUR chosen criteria, not "
-    "an absolute 'best' — reweighting changes it."
-)
-
-CRITERION_HELP: Dict[str, str] = {
-    "schedule": "Average timezone-adjusted overlap of teammates' weekly availability "
-                "blocks. Higher = teammates can actually meet at the same times.",
-    "major_diversity": "Share of distinct majors within each team. Higher = a broader "
-                       "mix of academic backgrounds per team.",
-    "experience_balance": "Whether each team has at least one member with relevant "
-                          "subject-matter experience (rated 3+). Higher = no team is "
-                          "left without experience.",
-    "work_experience_balance": "Whether each team includes someone with real work/"
-                               "organizational experience. Higher = experience is spread, "
-                               "not concentrated.",
-    "skill_coverage": "Across the nine skills, the share for which each team has at least "
-                      "one capable member (rated 3+). Higher = teams cover more skills.",
-    "quant_balance": "Whether each team has a capable quantitative analyst (rated 3+).",
-    "writing_balance": "Whether each team has a capable writer/editor (rated 3+).",
-    "presentation_balance": "Whether each team has a capable presenter (rated 3+).",
-    "research_balance": "Whether each team has a capable researcher (rated 3+).",
-    "planning_balance": "Whether each team has a capable project manager/planner (rated 3+).",
-    "tech_balance": "Whether each team has a capable AI/technology person (rated 3+).",
-    "leadership": "Whether each team has at least one student willing to coordinate "
-                  "(leadership 4+), without piling too many would-be leaders together.",
-    "role_coverage": "Variety of distinct preferred contribution roles represented in each "
-                     "team. Higher = broader role coverage.",
-    "commitment": "Similarity of teammates' desired effort level. Higher = closer aligned "
-                  "expectations, fewer effort mismatches.",
-    "pace": "Similarity of teammates' natural work pace (early-starters vs. deadline-driven).",
-    "response": "Similarity of teammates' expected communication response times.",
-    "meeting_format": "Similarity of teammates' in-person vs. online meeting preferences.",
-    "avoid_repeats": "Fraction of teammate pairs who have NOT worked together before. "
-                     "Higher = fewer repeated pairings.",
-    "preferred": "Fraction of students whose requested preferred teammate ended up on their "
-                 "team. Higher = more honored preferences (a soft goal, never a guarantee).",
-}
 
 
 # --------------------------------------------------------------------------- #

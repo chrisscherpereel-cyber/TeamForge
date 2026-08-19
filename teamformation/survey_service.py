@@ -374,9 +374,8 @@ def load_students_for_formation(vault: Vault, slug: str) -> List[dict]:
             "availability": {d: [] for d in DAYS}, "weekly_time": None,
             "skills": {k: None for k in SKILLS}, "roles": [], "leadership": None,
             "workstyle": {k: None for k in WORKSTYLE}, "effort": None, "pace": None,
-            "response_time": None, "prev_teammates": [], "preferred_teammate": "",
-            "has_concern": False, "concern_student": "", "concern_text": "",
-            "other_info": "",
+            "response_time": None, "prev_teammates": "", "preferred_teammate": "",
+            "has_concern": False, "concern_text": "", "other_info": "",
         }
         for k, default in blank.items():
             rec[k] = resp.get(k, default) if resp else default
