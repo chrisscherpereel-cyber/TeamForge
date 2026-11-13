@@ -6,8 +6,10 @@
 # Local vault backend writes here: accounts, survey config, roster snapshots,
 # and every student response. Even though it's encrypted, it's student-record data.
 vault_cache/
-*.ppx        # encrypted dataset bundles
-*.ppj        # accounts / survey / roster / response blobs
+# encrypted dataset bundles
+*.ppx
+# accounts / survey / roster / response blobs
+*.ppj
 
 # ── Raw student data & generated deliverables ─────────────────────────────
 *.csv
@@ -15,7 +17,8 @@ vault_cache/
 *.xls
 *.pdf
 *.zip
-*.eml        # generated email files / email packs
+# generated email files / email packs
+*.eml
 
 # ── Python / environment ──────────────────────────────────────────────────
 __pycache__/
