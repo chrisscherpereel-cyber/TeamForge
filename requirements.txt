@@ -1,13 +1,31 @@
-# TeamForge — team-formation application
-streamlit>=1.36
-pandas>=2.2
-numpy>=1.26
-openpyxl>=3.1          # Excel export
-cryptography>=42.0     # Fernet encryption of all PII at rest
-requests>=2.32         # Graph / Dropbox / pCloud REST
-msal>=1.28             # Microsoft 365 (Graph) auth
-dropbox>=11.36         # Dropbox storage backend
-streamlit-quill>=0.0.3 # WYSIWYG email editor (falls back to a plain box if absent)
+# TeamForge — what the app needs to run.
+#
+#   pip install -r requirements.txt
+#
+# Streamlit Community Cloud installs this file automatically on deploy.
+# Needs Python 3.10 or newer.
+#
+# Every entry has a lower bound (the oldest version this code is written
+# against) and an upper bound at the next major version. The upper bounds are
+# the point: without them, a major release of pandas or Streamlit lands in a
+# *fresh* install months from now and breaks it for someone who changed
+# nothing. Raise them deliberately, after running the tests.
 
-# Testing only:
+streamlit>=1.36,<2
+pandas>=2.2,<4
+numpy>=1.26,<3
+openpyxl>=3.1,<4            # Excel import/export
+cryptography>=42.0,<60      # Fernet encryption of all PII at rest
+requests>=2.32,<3           # Graph / pCloud REST
+
+# The storage backends. Not optional in practice: which one you use is a line
+# in your secrets, and Streamlit Community Cloud installs only this file — so
+# leaving one out turns changing that line into "ModuleNotFoundError" at
+# sign-in. pCloud needs nothing beyond requests.
+msal>=1.28,<2               # Microsoft 365 (Graph) storage and email
+dropbox>=11.36,<13          # Dropbox storage
+
+streamlit-quill>=0.0.3,<1   # WYSIWYG email editor (falls back to a plain box if absent)
+
+# Testing only (pip install pytest):
 # pytest>=8.0

@@ -12,12 +12,13 @@ Storage layout (every blob encrypted by the Vault before it leaves the process):
     survey__<slug>.ppj     the survey wording/config for one course+project
     roster__<slug>.ppj     the flat student roster snapshot (ordered, owner)
     resp__<slug>__p<pos>.ppj   one student's submission
+    draft__<slug>__p<pos>.ppj  a student's unsubmitted work in progress
 """
 from __future__ import annotations
 
 import json
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
 
 import pandas as pd
@@ -26,7 +27,7 @@ from .config import load_config
 from .ingest import Roster, name_key
 from .survey_schema import DEFAULT_SURVEY, DAYS, SKILLS, WORKSTYLE
 from .tokens import make_token
-from .vault import Vault
+from .vault import Vault, shared_vault
 
 
 # --------------------------------------------------------------------------- #
@@ -41,11 +42,60 @@ def parse_dt(value):
         return None
 
 
+# Whose clock? The server's own clock is UTC on Streamlit Community Cloud, so an
+# instructor in Arizona setting "closes Friday 5pm" was setting 5pm UTC — 10am
+# their time — and the survey shut mid-morning. The survey stores how far the
+# instructor's wall clock runs ahead of the server's, and every open/close time,
+# status badge and student-facing message is read against that clock. A survey
+# saved before this setting existed has no offset and behaves exactly as before.
+CLOCK_KEY = "clock_offset_minutes"
+
+
+def clock_offset(survey_cfg: Optional[Dict] = None) -> int:
+    """Minutes to add to the server clock to get the instructor's wall clock."""
+    try:
+        return int((survey_cfg or {}).get(CLOCK_KEY, 0) or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def local_now(survey_cfg: Optional[Dict] = None) -> datetime:
+    """Now, on the clock the instructor set. Every schedule is read against it."""
+    return datetime.now() + timedelta(minutes=clock_offset(survey_cfg))
+
+
+def offset_from_wall_clock(stated: datetime, server_now: Optional[datetime] = None,
+                           round_to: int = 5) -> int:
+    """The offset implied by "it is <stated> where I am", in minutes.
+
+    Rounded to five minutes: the instructor is typing a wall-clock time, and the
+    difference between a stated 5:00 and a server 4:58:37 is typing speed, not a
+    real offset. Every real zone offset is a multiple of fifteen minutes.
+    """
+    server_now = server_now or datetime.now()
+    delta = (stated - server_now).total_seconds() / 60.0
+    step = max(1, int(round_to))
+    return int(round(delta / step)) * step
+
+
+def describe_clock(survey_cfg: Optional[Dict] = None) -> str:
+    """One line for the instructor: what time this survey thinks it is."""
+    offset = clock_offset(survey_cfg)
+    now = local_now(survey_cfg)
+    if offset == 0:
+        return f"Scheduling clock: **{now:%b %d, %Y %I:%M %p}** (this server's own time)."
+    hours = offset / 60.0
+    sign = "ahead of" if offset > 0 else "behind"
+    return (f"Scheduling clock: **{now:%b %d, %Y %I:%M %p}** — "
+            f"{abs(hours):g} hour(s) {sign} this server's clock.")
+
+
 def window_state(survey_cfg: Dict) -> str:
-    """One of 'open', 'not_yet', 'closed', 'disabled' for the survey right now."""
+    """One of 'open', 'not_yet', 'closed', 'disabled' for the survey right now,
+    read against the instructor's scheduling clock."""
     if not survey_cfg.get("is_open", True):
         return "disabled"
-    now = datetime.now()
+    now = local_now(survey_cfg)
     opens = parse_dt(survey_cfg.get("opens_at"))
     closes = parse_dt(survey_cfg.get("closes_at"))
     if opens and now < opens:
@@ -95,6 +145,10 @@ def key_roster(slug: str) -> str:
 
 def key_response(slug: str, pos: int) -> str:
     return f"resp__{slug}__p{pos}.ppj"
+
+
+def key_draft(slug: str, pos: int) -> str:
+    return f"draft__{slug}__p{pos}.ppj"
 
 
 def _resp_prefix(slug: str) -> str:
@@ -188,7 +242,7 @@ def save_setup(course: str, label: str, contact_df: pd.DataFrame,
                owner: Optional[str] = None):
     """Persist the roster snapshot + survey config. Preserves existing positions
     where students already exist; appends genuinely new students at the end."""
-    vault = vault or Vault()
+    vault = vault or shared_vault()
     slug = slugify(course, label)
     incoming = build_students(contact_df)
     existing = load_roster_snapshot(vault, slug)
@@ -240,7 +294,7 @@ def survey_owner(vault: Vault, slug: str) -> Optional[str]:
 
 
 def list_surveys(vault: Optional[Vault] = None):
-    vault = vault or Vault()
+    vault = vault or shared_vault()
     try:
         names = [n for n in vault.list()
                  if str(n).startswith("roster__") and str(n).endswith(".ppj")]
@@ -326,6 +380,35 @@ def load_response(vault: Vault, slug: str, pos: int) -> Optional[dict]:
         return None
 
 
+# Drafts live under their own name. They used to be written over the
+# submission key with complete=False, which meant (a) a student who had only
+# opened the survey counted as "responded" and was skipped by reminders, and
+# (b) counting responses required reading every file. With separate names, the
+# object listing alone says who has submitted.
+def save_draft(vault: Vault, slug: str, pos: int, payload: dict) -> None:
+    _save_json(vault, key_draft(slug, pos), payload)
+
+
+def load_draft(vault: Vault, slug: str, pos: int) -> Optional[dict]:
+    try:
+        return _load_json(vault, key_draft(slug, pos))
+    except Exception:
+        return None
+
+
+def clear_draft(vault: Vault, slug: str, pos: int) -> None:
+    try:
+        vault.delete(key_draft(slug, pos))
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def load_work_in_progress(vault: Vault, slug: str, pos: int) -> Optional[dict]:
+    """What a returning student should see: an unsubmitted draft if there is
+    one (their latest edits), otherwise their submitted response."""
+    return load_draft(vault, slug, pos) or load_response(vault, slug, pos)
+
+
 def all_responses(vault: Vault, slug: str) -> Dict[int, dict]:
     """Map position -> response payload for every submitted response."""
     prefix = _resp_prefix(slug)
@@ -339,10 +422,38 @@ def all_responses(vault: Vault, slug: str) -> Dict[int, dict]:
         if not m:
             continue
         try:
-            out[int(m.group(1))] = _load_json(vault, n)
+            payload = _load_json(vault, n)
         except Exception:
-            pass
+            continue
+        # A draft saved by an older version under the submission key.
+        if isinstance(payload, dict) and payload.get("complete") is False:
+            continue
+        out[int(m.group(1))] = payload
     return out
+
+
+def responded_positions(vault: Vault, slug: str) -> set:
+    """Who has submitted — from the object names alone, with no reads.
+
+    The Dashboard and Responses tabs want this on every rerun, and they used to
+    get it from ``all_responses``, which fetches and decrypts every submission.
+    One listing answers the same question.
+    """
+    prefix = _resp_prefix(slug)
+    try:
+        names = [str(n) for n in vault.list() if str(n).startswith(prefix)]
+    except Exception:  # noqa: BLE001
+        return set()
+    out = set()
+    for n in names:
+        m = re.search(r"__p(\d+)\.ppj$", n)
+        if m:
+            out.add(int(m.group(1)))
+    return out
+
+
+def response_count(vault: Vault, slug: str) -> int:
+    return len(responded_positions(vault, slug))
 
 
 def response_status(vault: Vault, slug: str) -> List[dict]:
@@ -350,7 +461,7 @@ def response_status(vault: Vault, slug: str) -> List[dict]:
     snap = load_roster_snapshot(vault, slug)
     if not snap:
         return []
-    got = set(all_responses(vault, slug).keys())
+    got = responded_positions(vault, slug)
     rows = []
     for pos, m in enumerate(snap.get("students", [])):
         rows.append({"pos": pos, "name": m["name"], "email": m.get("email", ""),

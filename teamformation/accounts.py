@@ -23,7 +23,7 @@ import json
 import os
 from typing import Dict, Optional
 
-from .vault import Vault
+from .vault import Vault, shared_vault
 
 ACCOUNTS_KEY = "accounts.ppj"
 _PBKDF2_ROUNDS = 200_000
@@ -49,7 +49,7 @@ def _verify_password(password: str, salt: str, expected_hash: str) -> bool:
 # Storage
 # --------------------------------------------------------------------------- #
 def load_accounts(vault: Optional[Vault] = None) -> Dict[str, dict]:
-    vault = vault or Vault()
+    vault = vault or shared_vault()
     try:
         return json.loads(vault.get_bytes(ACCOUNTS_KEY).decode("utf-8"))
     except Exception:
@@ -57,7 +57,7 @@ def load_accounts(vault: Optional[Vault] = None) -> Dict[str, dict]:
 
 
 def save_accounts(accounts: Dict[str, dict], vault: Optional[Vault] = None) -> None:
-    vault = vault or Vault()
+    vault = vault or shared_vault()
     vault.put_bytes(ACCOUNTS_KEY, json.dumps(accounts, default=str).encode("utf-8"))
 
 
@@ -72,7 +72,7 @@ def authenticate(username: str, password: str, cfg, vault: Optional[Vault] = Non
                  ) -> Optional[dict]:
     """Return a session user dict {user, name, role, source} or None."""
     username = (username or "").strip()
-    vault = vault or Vault()
+    vault = vault or shared_vault()
     accounts = load_accounts(vault)
 
     acct = accounts.get(username)
@@ -106,7 +106,7 @@ def add_account(username: str, name: str, role: str, password: str,
         raise ValueError("Username is required.")
     if username == "admin":
         raise ValueError("'admin' is reserved for the break-glass account.")
-    vault = vault or Vault()
+    vault = vault or shared_vault()
     accounts = load_accounts(vault)
     if username in accounts:
         raise ValueError(f"An account named '{username}' already exists.")
@@ -119,7 +119,7 @@ def add_account(username: str, name: str, role: str, password: str,
 
 def set_password(username: str, password: str, vault: Optional[Vault] = None,
                  must_change: bool = False) -> None:
-    vault = vault or Vault()
+    vault = vault or shared_vault()
     accounts = load_accounts(vault)
     if username not in accounts:
         raise ValueError("No such account.")
@@ -129,7 +129,7 @@ def set_password(username: str, password: str, vault: Optional[Vault] = None,
 
 
 def set_role(username: str, role: str, vault: Optional[Vault] = None) -> None:
-    vault = vault or Vault()
+    vault = vault or shared_vault()
     accounts = load_accounts(vault)
     if username not in accounts:
         raise ValueError("No such account.")
@@ -138,7 +138,7 @@ def set_role(username: str, role: str, vault: Optional[Vault] = None) -> None:
 
 
 def set_active(username: str, active: bool, vault: Optional[Vault] = None) -> None:
-    vault = vault or Vault()
+    vault = vault or shared_vault()
     accounts = load_accounts(vault)
     if username not in accounts:
         raise ValueError("No such account.")
@@ -147,7 +147,7 @@ def set_active(username: str, active: bool, vault: Optional[Vault] = None) -> No
 
 
 def remove_account(username: str, vault: Optional[Vault] = None) -> None:
-    vault = vault or Vault()
+    vault = vault or shared_vault()
     accounts = load_accounts(vault)
     accounts.pop(username, None)
     save_accounts(accounts, vault)

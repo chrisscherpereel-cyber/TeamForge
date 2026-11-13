@@ -22,6 +22,12 @@ def render(ctx):
     final = fsvc.load_final(ctx.vault, ctx.slug)
     proposed = st.session_state.get(f"proposed::{ctx.slug}")
 
+    if st.button("↻ Check for new responses", key="dash_refresh",
+                 help="Stored data is re-read at most once a minute so clicks stay "
+                      "fast. This re-reads it now."):
+        ctx.vault.refresh()
+        st.rerun()
+
     m = st.columns(4)
     m[0].metric("Enrollment", total)
     m[1].metric("Survey responses", f"{got} / {total}")

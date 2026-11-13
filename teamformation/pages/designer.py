@@ -14,6 +14,7 @@ from .. import formation_service as fsvc
 from .. import scoring
 from ..optimizer import generate, team_size_distribution
 from ..ingest import name_key
+from ..ui_helpers import FULL_WIDTH
 
 
 # Formation methods offered in the dropdown (label -> optimizer method key).
@@ -246,7 +247,7 @@ def _render_baseline_compare(ctx, design, weights):
                 rows.append({"Metric": crit.label if crit else k,
                              "Baseline": bv, "Current": v,
                              "Δ": (v - bv) if bv is not None else None})
-            c2.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+            c2.dataframe(pd.DataFrame(rows), **FULL_WIDTH, hide_index=True)
 
 
 # --------------------------------------------------------------------------- #

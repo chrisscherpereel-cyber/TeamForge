@@ -18,7 +18,6 @@ import os
 from dataclasses import dataclass
 
 import streamlit as st
-import streamlit.components.v1 as components
 
 from teamformation import __version__, APP_NAME
 from teamformation import accounts
@@ -27,7 +26,8 @@ from teamformation.branding import render_header
 from teamformation.config import load_config
 from teamformation import survey_service as svc
 from teamformation import student_form
-from teamformation.vault import Vault
+from teamformation.vault import Vault, shared_vault
+from teamformation.ui_helpers import embed_html
 from teamformation.pages import (
     dashboard, roster as roster_page, survey_setup, monitor, designer,
     finalize as finalize_page, communications, exports,
@@ -68,6 +68,30 @@ if _token:
     student_form.render_student_app(_token)
     st.stop()
 
+# Storage first. A backend that cannot be opened — its package missing from
+# requirements.txt, or credentials not filled in — used to surface as a raw
+# traceback (or a confusing sign-in failure). This check is answered locally,
+# with no network round trip, so a slow provider can never hold up first paint;
+# whether storage is *reachable* is reported in the sidebar afterwards.
+_storage = shared_vault()
+if not _storage.available:
+    st.markdown("### This app cannot reach its storage")
+    st.error(_storage.error, icon="🗄️")
+    st.markdown("Nothing is lost: TeamForge has not been able to read or write "
+                "anything, so whatever is stored is still there, exactly as it was.")
+    with st.expander("What usually causes this"):
+        st.markdown(
+            "- **A package the storage backend needs is not installed.** On "
+            "Streamlit Community Cloud only `requirements.txt` is installed — "
+            "`dropbox` for Dropbox, `msal` for Microsoft 365. Add the line, "
+            "commit, and the app redeploys itself.\n"
+            "- **The credentials in the app's secrets are incomplete.** Check the "
+            "`[vault.…]` section of your secrets.\n"
+            "- **The provider is temporarily unreachable.** Reload in a minute.")
+    st.caption("Students opening their links see a short 'not available right now' "
+               "message meanwhile — not this screen.")
+    st.stop()
+
 if not require_login():
     st.stop()
 
@@ -76,7 +100,9 @@ S = st.session_state
 user = S.get("pp_user") or {"user": "admin", "name": "Administrator",
                             "role": "admin", "source": "secrets"}
 is_admin = accounts.is_admin(user)
-vault = Vault()
+# One shared vault (and one signed-in backend) for every rerun; reads through it
+# are cached for a minute, so a click costs no storage round trips.
+vault = shared_vault()
 
 
 # --------------------------------------------------------------------------- #
@@ -84,7 +110,7 @@ vault = Vault()
 # --------------------------------------------------------------------------- #
 def _scroll_to_top():
     token = S.get("_nav_token", 0)
-    components.html(
+    embed_html(
         f"""<script>
         /* nav-token:{token} */
         (function() {{
@@ -104,7 +130,7 @@ def _scroll_to_top():
             }}, true);
           }}
         }})();
-        </script>""", height=0)
+        </script>""")
 
 
 # --------------------------------------------------------------------------- #
@@ -115,6 +141,8 @@ with st.sidebar:
     st.caption(f"`{user.get('user')}` · "
                + ("administrator — every course" if is_admin
                   else "instructor — your courses only"))
+    # Drawn from the outcome of the work the app actually did, not a probe of
+    # its own, so the badge costs nothing on a rerun.
     ok, msg = vault.healthcheck()
     (st.success if ok else st.warning)(msg)
     st.caption(f"Storage: **{cfg.vault.backend}** · {APP_NAME} v{__version__}")

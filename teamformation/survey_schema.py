@@ -191,6 +191,10 @@ DEFAULT_SURVEY: Dict = {
     "opens_at": "",
     "closes_at": "",
     "closed_note": "This survey is now closed. Thank you.",
+    # Minutes the instructor's wall clock runs ahead of the server's (UTC on
+    # Streamlit Cloud). None = not chosen yet; open/close times are read
+    # against server time + this offset. See survey_service.local_now().
+    "clock_offset_minutes": None,
     # Whether students may reopen and edit before the deadline
     "allow_edit": True,
     # Whether students may view their released team assignment inside the app

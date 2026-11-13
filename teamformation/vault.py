@@ -21,12 +21,12 @@ from __future__ import annotations
 
 import io
 import os
-from typing import List, Protocol
+from typing import Any, Dict, List, Optional, Protocol, Tuple
 
 import requests
 
 from .config import VaultConfig, load_config
-from .security import decrypt_bytes, encrypt_bytes
+from .security import CryptoError, decrypt_bytes, encrypt_bytes
 
 
 class StorageBackend(Protocol):
@@ -79,24 +79,27 @@ class M365Backend:
         self.client_secret = opts["client_secret"]
         self.drive = opts.get("drive", "onedrive")
         self.site_id = opts.get("site_id", "")
-        self._token = None
+        self._app = None
 
     def _get_token(self) -> str:
-        if self._token:
-            return self._token
+        # One MSAL client per backend, asked every time: MSAL serves the token
+        # from its own cache and renews it shortly before it expires. Keeping
+        # the raw token string forever (as this used to) breaks about an hour
+        # after start-up once a vault instance is shared across reruns.
         import msal
-        app = msal.ConfidentialClientApplication(
-            self.client_id,
-            authority=f"https://login.microsoftonline.com/{self.tenant_id}",
-            client_credential=self.client_secret,
-        )
-        result = app.acquire_token_for_client(
+        if self._app is None:
+            self._app = msal.ConfidentialClientApplication(
+                self.client_id,
+                authority=f"https://login.microsoftonline.com/{self.tenant_id}",
+                client_credential=self.client_secret,
+                timeout=20,
+            )
+        result = self._app.acquire_token_for_client(
             scopes=["https://graph.microsoft.com/.default"]
         )
         if "access_token" not in result:
             raise RuntimeError(f"M365 auth failed: {result.get('error_description')}")
-        self._token = result["access_token"]
-        return self._token
+        return result["access_token"]
 
     def _drive_root(self) -> str:
         if self.drive == "sharepoint":
@@ -128,12 +131,21 @@ class M365Backend:
         return r.content
 
     def list(self) -> List[str]:
-        url = f"{self._drive_root()}/root:/{self.folder}:/children"
-        r = requests.get(url, headers=self._headers(), timeout=60)
-        if r.status_code == 404:
-            return []
-        r.raise_for_status()
-        return [c["name"] for c in r.json().get("value", [])]
+        # Graph pages folder listings (about 200 items a page by default).
+        # Reading only the first page made responses beyond it invisible once a
+        # vault held a few courses' worth of files, so every page is followed.
+        url = (f"{self._drive_root()}/root:/{self.folder}:/children"
+               f"?$select=name&$top=999")
+        names: List[str] = []
+        while url:
+            r = requests.get(url, headers=self._headers(), timeout=60)
+            if r.status_code == 404:
+                return names
+            r.raise_for_status()
+            body = r.json()
+            names.extend(c["name"] for c in body.get("value", []))
+            url = body.get("@odata.nextLink")
+        return names
 
     def delete(self, name: str) -> None:
         url = f"{self._drive_root()}/root:/{self._item_path(name)}:"
@@ -147,14 +159,20 @@ class DropboxBackend:
     def __init__(self, folder: str, opts: dict):
         import dropbox
         self.folder = "/" + folder.strip("/")
+        # Bounded: the SDK's defaults are a 100-second timeout and four retries,
+        # so one wrong credential can keep a page spinning for minutes with
+        # nothing on screen. Failing in twenty seconds lets the app say what is
+        # wrong instead.
+        _limits = {"timeout": 20, "max_retries_on_error": 1}
         if opts.get("refresh_token"):
             self.dbx = dropbox.Dropbox(
                 oauth2_refresh_token=opts["refresh_token"],
                 app_key=opts.get("app_key"),
                 app_secret=opts.get("app_secret"),
+                **_limits,
             )
         else:
-            self.dbx = dropbox.Dropbox(opts["access_token"])
+            self.dbx = dropbox.Dropbox(opts["access_token"], **_limits)
 
     def _p(self, name: str) -> str:
         return f"{self.folder}/{name}"
@@ -173,7 +191,11 @@ class DropboxBackend:
     def list(self) -> List[str]:
         try:
             res = self.dbx.files_list_folder(self.folder)
-            return [e.name for e in res.entries]
+            names = [e.name for e in res.entries]
+            while res.has_more:     # follow every page, not just the first
+                res = self.dbx.files_list_folder_continue(res.cursor)
+                names.extend(e.name for e in res.entries)
+            return names
         except Exception:
             return []
 
@@ -196,6 +218,7 @@ class PCloudBackend:
         self.username = opts.get("username", "")
         self.password = opts.get("password", "")
         self._auth = None
+        self._folder_ready = False
 
     def _auth_params(self) -> dict:
         if self.access_token:
@@ -211,11 +234,15 @@ class PCloudBackend:
         return {"auth": self._auth}
 
     def _ensure_folder(self) -> None:
+        # Once per backend, not once per write: it is a round trip each time.
+        if self._folder_ready:
+            return
         requests.get(
             f"{self.base}/createfolderifnotexists",
             params={**self._auth_params(), "path": f"/{self.folder}"},
             timeout=30,
         )
+        self._folder_ready = True
 
     def put(self, name: str, data: bytes) -> str:
         self._ensure_folder()
@@ -258,6 +285,21 @@ class PCloudBackend:
 # --------------------------------------------------------------------------- #
 # Factory + encrypted convenience wrapper
 # --------------------------------------------------------------------------- #
+class VaultUnavailable(RuntimeError):
+    """This app cannot reach its storage at all, and why — in plain words.
+
+    Its own type because the cause is almost always configuration rather than a
+    fault: a backend chosen in secrets whose package is not installed, or
+    credentials that are not filled in. Those used to surface as a raw
+    `ModuleNotFoundError: dropbox` traceback on the sign-in screen, which tells
+    an instructor nothing they can act on and looks like the app is broken.
+    """
+
+
+# Which package each backend needs, for the message when it is missing.
+_BACKEND_PACKAGE = {"dropbox": "dropbox", "m365": "msal"}
+
+
 def _make_backend(cfg: VaultConfig) -> StorageBackend:
     b = cfg.backend.lower()
     try:
@@ -268,15 +310,114 @@ def _make_backend(cfg: VaultConfig) -> StorageBackend:
         if b == "pcloud":
             return PCloudBackend(cfg.folder, cfg.options)
         return LocalBackend(cfg.folder)
-    except ModuleNotFoundError as exc:
-        # An optional backend library isn't installed. Fail with guidance rather
-        # than a raw traceback at login.
-        raise RuntimeError(
-            f"Storage backend '{b}' is selected in secrets, but its Python package "
-            f"isn't installed ({exc.name}). Either add '{exc.name}' to requirements.txt "
-            f"and redeploy, or change [vault] backend in your secrets to 'm365' or "
-            f"'local'."
+    except ImportError as exc:
+        package = _BACKEND_PACKAGE.get(b, b)
+        raise VaultUnavailable(
+            f"Storage is set to '{b}', but the `{package}` package is not "
+            f"installed here, so this app cannot open it. Add `{package}` to "
+            f"requirements.txt and redeploy — on Streamlit Community Cloud that "
+            f"is the only file it installs — or change `[vault] backend` in the "
+            f"app's secrets to one that is available."
         ) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise VaultUnavailable(
+            f"Storage is set to '{b}', but it could not be opened: {exc}. "
+            f"Check the `[vault.{b}]` settings in the app's secrets."
+        ) from exc
+
+
+# --------------------------------------------------------------------------- #
+# A short-lived read cache, because Streamlit reruns everything
+# --------------------------------------------------------------------------- #
+# Streamlit re-executes the whole script on every click, keystroke and
+# checkbox. Measured on a 40-student section, one such rerun asked storage for
+# 52 objects — the survey, the roster, every one of the forty responses, the
+# account list. On a laptop that is 0.2 seconds and invisible. On Microsoft 365
+# or Dropbox, where each one is an HTTPS round trip of 100–300ms, the same click
+# costs five to fifteen seconds, which is what "changing the schedule is very
+# slow" actually was.
+#
+# So reads are remembered for a few seconds. The cache is deliberately simple
+# and deliberately short:
+#
+#   * a write refreshes the entry it wrote, so a save is visible immediately —
+#     the instructor must never see the value they just replaced;
+#   * a delete drops it;
+#   * anything else expires on its own within TTL seconds, which is what keeps
+#     a student's submission from going unnoticed: it was written by another
+#     process and nothing here can know about it;
+#   * `Vault.refresh()` clears it outright, which is what the "Check for new
+#     responses" button does.
+#
+# Values are stored decrypted, in memory, in a process that already holds the
+# key and the plaintext — so this adds no exposure that the app did not already
+# have. Nothing is written to disk.
+
+# A minute. Fifteen seconds was too short in the case that matters most: when
+# the provider is slow, a single cold page can take longer than the window, so
+# entries expired *during* the run that fetched them and the next click paid
+# for them all over again. A minute also covers an instructor working through a
+# tab without re-reading anything, while "Check for new responses" stays the
+# instrument for wanting an answer now.
+CACHE_TTL = 60.0
+
+_reads: Dict[Tuple[str, str, str], Tuple[float, Any]] = {}
+_listings: Dict[Tuple[str, str], Tuple[float, List[str]]] = {}
+
+# A sentinel for "this object is not there", so that an unsaved survey does not
+# re-ask storage on every rerun just to be told no again.
+_MISSING = object()
+
+
+def _now() -> float:
+    import time
+    return time.monotonic()
+
+
+# What this process itself last wrote, by digest. TeamForge autosaves on every
+# rerun (the team-design settings and the proposed scenario are written back
+# each time the Design Teams tab draws, so a reload restores them), and on a
+# cloud store each of those writes is an HTTPS upload. Rewriting the bytes we
+# wrote a moment ago changes nothing, so it is skipped. Deliberately narrow: it
+# only ever skips a repeat of *our own* write inside the cache window, so it
+# cannot hide a change made by another process.
+_writes: Dict[Tuple[str, str, str], Tuple[float, str]] = {}
+
+
+def _digest(data: bytes) -> str:
+    import hashlib
+    return hashlib.sha256(data).hexdigest()
+
+
+def clear_cache() -> None:
+    """Forget every remembered read. Used by the refresh buttons and by tests."""
+    _reads.clear()
+    _listings.clear()
+    _writes.clear()
+
+
+_shared: Dict[Tuple[str, str, str, str], "Vault"] = {}
+
+
+def shared_vault() -> "Vault":
+    """One Vault per storage configuration, reused across reruns and sessions.
+
+    Streamlit reruns the whole script on every click, and building a Vault
+    builds a backend — on Microsoft 365 or pCloud that means signing in again.
+    Reads are already cached module-wide; this also shares the signed-in
+    backend. A vault whose backend could not be opened is never shared, so
+    fixing the configuration takes effect on the next rerun.
+    """
+    import json as _json
+    cfg = load_config().vault
+    key = (cfg.backend, str(cfg.folder),
+           _json.dumps(cfg.options, sort_keys=True, default=str), os.getcwd())
+    v = _shared.get(key)
+    if v is None or not v.available:
+        v = Vault(cfg)
+        if v.available:
+            _shared[key] = v
+    return v
 
 
 class Vault:
@@ -284,27 +425,204 @@ class Vault:
 
     def __init__(self, cfg: VaultConfig | None = None):
         self.cfg = cfg or load_config().vault
-        self.backend = _make_backend(self.cfg)
+        # Constructing the backend can fail for reasons the instructor can fix,
+        # and `Vault()` is built in a dozen places including the sign-in path.
+        # So the failure is remembered rather than raised here: the sidebar
+        # healthcheck and the setup screen can then say what is wrong, and only
+        # an actual read or write raises.
+        self._backend: Optional[StorageBackend] = None
+        self._error = ""
+        # How the last real read or write went. The sidebar's status badge is
+        # drawn from this rather than from a probe of its own: a dedicated
+        # probe is a network round trip on a page that has already done its
+        # work, and when storage is slow to answer it delays the whole page.
+        self._last_ok: Optional[bool] = None
+        self._last_error = ""
+        try:
+            self._backend = _make_backend(self.cfg)
+        except VaultUnavailable as exc:
+            self._error = str(exc)
+        except Exception as exc:  # noqa: BLE001
+            self._error = f"Storage could not be opened: {exc}"
+
+    @property
+    def backend(self) -> StorageBackend:
+        if self._backend is None:
+            raise VaultUnavailable(self._error or "Storage is not available.")
+        return self._backend
+
+    @property
+    def available(self) -> bool:
+        """Can this app open its storage at all? Answered without any I/O.
+
+        Deliberately local: it reports a missing package or credentials that do
+        not parse, and says nothing about whether the provider is reachable.
+        That distinction is what keeps a slow or unreachable provider from
+        delaying the sign-in screen — the app can ask this before painting
+        anything, and ask the reachability question later.
+        """
+        return self._backend is not None
+
+    def _record(self, ok: bool, error: str = "") -> None:
+        self._last_ok, self._last_error = ok, error
+
+    @property
+    def error(self) -> str:
+        return self._error
 
     @property
     def name(self) -> str:
         return self.cfg.backend
 
+    # ---- cache plumbing -------------------------------------------------
+    @property
+    def _scope(self) -> Tuple[str, str]:
+        """Two vaults pointing at the same place share a cache; others do not.
+
+        "The same place" has to include the local backend's absolute root, not
+        just the backend name and folder: two local vaults with the same folder
+        name under different working directories are different stores holding
+        different students, and sharing a cache between them would serve one
+        section's data to the other. The test suite found this immediately —
+        which is the argument for the absolute path being in the key.
+        """
+        return (f"{self.cfg.backend}:{getattr(self._backend, 'root', '')}",
+                str(self.cfg.folder))
+
+    def refresh(self) -> None:
+        """Drop this vault's remembered reads, so the next one goes to storage."""
+        for key in [k for k in _reads if k[:2] == self._scope]:
+            _reads.pop(key, None)
+        for key in [k for k in _writes if k[:2] == self._scope]:
+            _writes.pop(key, None)
+        _listings.pop(self._scope, None)
+
+    def _remember(self, name: str, data: Any) -> None:
+        _reads[(*self._scope, name)] = (_now(), data)
+
+    def _forget(self, name: str) -> None:
+        _reads.pop((*self._scope, name), None)
+        _writes.pop((*self._scope, name), None)
+        self._listing_without(name)
+
+    def _listing_with(self, name: str) -> None:
+        """Keep the cached listing current rather than throwing it away.
+
+        A rerun that writes anything — the autosave, a saved setting — used to
+        invalidate the listing and make the next read of it a second round trip.
+        A listing we already hold plus a name we just wrote is still a correct
+        listing, so it is updated in place.
+        """
+        hit = _listings.get(self._scope)
+        if hit is None:
+            return
+        when, names = hit
+        if name not in names:
+            _listings[self._scope] = (when, sorted([*names, name]))
+
+    def _listing_without(self, name: str) -> None:
+        hit = _listings.get(self._scope)
+        if hit is None:
+            return
+        when, names = hit
+        _listings[self._scope] = (when, [n for n in names if n != name])
+
+    # ---- the operations -------------------------------------------------
     def put_bytes(self, name: str, data: bytes) -> str:
-        return self.backend.put(name, encrypt_bytes(data))
+        key = (*self._scope, name)
+        digest = _digest(data)
+        prior = _writes.get(key)
+        if prior is not None and prior[1] == digest and _now() - prior[0] < CACHE_TTL:
+            return name          # identical to what we just wrote: no upload
+        try:
+            out = self.backend.put(name, encrypt_bytes(data))
+        except VaultUnavailable:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            self._record(False, f"Could not write to storage: {exc}")
+            raise
+        self._record(True)
+        # Remember what was just written rather than dropping the entry: a save
+        # is immediately followed by a read of the same object (the page redraws
+        # from it), and that read must return the new value, not the old one and
+        # not a round trip.
+        self._remember(name, data)
+        _writes[key] = (_now(), digest)
+        self._listing_with(name)
+        return out
 
     def get_bytes(self, name: str) -> bytes:
-        return decrypt_bytes(self.backend.get(name))
+        key = (*self._scope, name)
+        hit = _reads.get(key)
+        if hit is not None and _now() - hit[0] < CACHE_TTL:
+            if hit[1] is _MISSING:
+                raise KeyError(f"{name} is not in this vault")
+            return hit[1]
+        try:
+            data = decrypt_bytes(self.backend.get(name))
+        except VaultUnavailable:
+            raise
+        except Exception:
+            # Cache the absence too, but only that: a decryption failure is
+            # remembered as "missing" for a few seconds, and the error itself is
+            # re-raised unchanged for the caller to report.
+            self._remember(name, _MISSING)
+            raise
+        self._remember(name, data)
+        return data
 
     def list(self) -> List[str]:
-        return self.backend.list()
+        hit = _listings.get(self._scope)
+        if hit is not None and _now() - hit[0] < CACHE_TTL:
+            return list(hit[1])
+        try:
+            names = self.backend.list()
+        except VaultUnavailable:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            self._record(False, f"Storage '{self.cfg.backend}' is not reachable: {exc}")
+            raise
+        self._record(True)
+        _listings[self._scope] = (_now(), list(names))
+        return list(names)
 
     def delete(self, name: str) -> None:
         self.backend.delete(name)
+        self._forget(name)
 
     def healthcheck(self) -> tuple[bool, str]:
+        """Can this app actually store student data right now?
+
+        Listing the backend is not enough to answer that. Every write goes
+        through Fernet first, so with no encryption key configured the local
+        backend listed happily and reported "reachable" in green — and the
+        instructor found out only after typing in forty students and clicking
+        Save. The key is checked here, in memory, with no round trip.
+        """
+        if not self.available:
+            return False, self._error
+        if self._last_ok is True:
+            return True, f"Storage '{self.cfg.backend}' is ready."
+        if self._last_ok is False and self._last_error:
+            return False, self._last_error
         try:
-            self.backend.list()
-            return True, f"Vault '{self.cfg.backend}' reachable."
+            # Through the cache: this check runs on every rerun, and it was the
+            # last thing still making a round trip on each one. A green badge
+            # that is up to CACHE_TTL seconds old is a fair trade for not
+            # charging the instructor a network call per click; a store that
+            # goes away is still reported within that window.
+            self.list()
+        except VaultUnavailable as exc:
+            return False, str(exc)
         except Exception as exc:  # noqa: BLE001
-            return False, f"Vault '{self.cfg.backend}' error: {exc}"
+            return False, f"Storage '{self.cfg.backend}' is not reachable: {exc}"
+        try:
+            probe = b"teamforge-healthcheck"
+            if decrypt_bytes(encrypt_bytes(probe)) != probe:
+                raise CryptoError("the encryption key did not round-trip")
+        except Exception as exc:  # noqa: BLE001
+            return False, (
+                f"Storage '{self.cfg.backend}' is reachable, but this app "
+                f"cannot store student data yet: {exc}"
+            )
+        return True, f"Storage '{self.cfg.backend}' is ready."
