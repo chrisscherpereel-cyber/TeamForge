@@ -9,6 +9,7 @@ from ..survey_service import token_secret
 from ..tokens import make_token
 from ..ui_helpers import email_send_panel, email_body_editor
 from .. import email_delivery as mail
+from ..ui_helpers import FULL_WIDTH, default_public_url
 
 REMINDER = (
     "Hi {first_name},<br><br>"
@@ -34,6 +35,11 @@ def render(ctx):
     m2.metric("Responses", f"{got} / {total}")
     m3.metric("Completion", f"{(100*got/total):.0f}%" if total else "—")
     m4.metric("Excluded", total - len(active))
+    if st.button("↻ Check for new responses", key="resp_refresh",
+                 help="Stored data is re-read at most once a minute so clicks stay "
+                      "fast. This re-reads it now."):
+        vault.refresh()
+        st.rerun()
     latest = svc.latest_submission(vault, ctx.slug)
     if latest:
         st.caption(f"Latest submission: **{latest}** (UTC)")
@@ -49,7 +55,7 @@ def render(ctx):
         lambda r: "Excluded" if r["excluded"]
         else ("Responded" if r["responded"] else "No Survey Response"), axis=1)
     st.dataframe(sdf[["name", "email", "section", "status"]],
-                 use_container_width=True, height=320)
+                 **FULL_WIDTH, height=320)
     st.download_button("⬇ response-status.csv", sdf.to_csv(index=False),
                        f"{ctx.slug}_status.csv", "text/csv")
 
@@ -74,7 +80,7 @@ def render(ctx):
         st.markdown(f"##### {len(nonresp)} student(s) have not responded")
         base_url = st.text_input("Public app URL",
                                  st.session_state.get("inv_url")
-                                 or getattr(ctx.cfg, "public_url", "") or "",
+                                 or default_public_url(ctx.cfg),
                                  key="rem_url")
         subj = st.text_input("Subject", "Reminder: team-formation survey for {class}",
                              key="rem_subj")

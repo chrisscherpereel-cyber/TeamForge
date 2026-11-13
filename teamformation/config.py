@@ -3,8 +3,8 @@
 Reads from Streamlit secrets when available, otherwise from environment
 variables / a local secrets.toml. Nothing sensitive is hard-coded here.
 
-Reused unchanged from the original application except for branding defaults —
-the vault folder and public URL now default to TeamForge.
+Reused from the original application, with its later fixes: VAULT_FOLDER is
+honoured as an environment variable, and public_url has no fake default.
 """
 from __future__ import annotations
 
@@ -58,7 +58,11 @@ class AppConfig:
     # used to build them. token_secret is optional — survey_service.token_secret()
     # derives a stable fallback from fernet_key when it's blank.
     token_secret: str = ""
-    public_url: str = "https://teamforge.streamlit.app"
+    # Deliberately empty. A real-looking default is worse than none: it makes
+    # the "enter the app URL first" check pass, so an instructor whose
+    # deployment lives elsewhere would email every student a link to somebody
+    # else's app. The app fills this in from the browser's own address instead.
+    public_url: str = ""
     vault: VaultConfig = field(default_factory=VaultConfig)
     email: EmailConfig = field(default_factory=EmailConfig)
     m365: Dict[str, Any] = field(default_factory=dict)
@@ -68,7 +72,10 @@ def load_config() -> AppConfig:
     s = _secrets()
     vault_node = s.get("vault", {}) or {}
     backend = vault_node.get("backend", os.environ.get("VAULT_BACKEND", "local"))
-    folder = vault_node.get("folder", "TeamForge")
+    # The folder honours an environment fallback just as the backend does, so
+    # two local installs (or a test run) can be pointed at separate folders
+    # without a secrets file.
+    folder = vault_node.get("folder", os.environ.get("VAULT_FOLDER", "TeamForge"))
     options = vault_node.get(backend, {}) or {}
 
     m365 = (s.get("vault", {}) or {}).get("m365", {}) or {}
@@ -87,7 +94,7 @@ def load_config() -> AppConfig:
         app_password_sha256=str(_get(None, "app_password_sha256", "")),
         fernet_key=str(_get(None, "fernet_key", "")),
         token_secret=str(_get(None, "token_secret", "")),
-        public_url=str(_get(None, "public_url", "https://teamforge.streamlit.app")),
+        public_url=str(_get(None, "public_url", "")),
         vault=VaultConfig(backend=backend, folder=folder, options=dict(options)),
         email=email,
         m365=dict(m365),

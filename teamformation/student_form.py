@@ -12,7 +12,6 @@ from datetime import datetime, timezone
 from typing import Dict, List
 
 import streamlit as st
-import streamlit.components.v1 as components
 
 from .config import load_config
 from .ingest import name_key
@@ -22,16 +21,18 @@ from .survey_schema import (
     RESPONSE_TIME, SUBJECT_EXPERIENCE, WORK_EXPERIENCE, STANDINGS,
 )
 from .survey_service import (
-    load_roster_snapshot, load_survey, load_response, save_response,
+    load_roster_snapshot, load_survey, load_work_in_progress, save_response,
+    save_draft, clear_draft,
     token_secret, window_state, window_message, parse_dt,
 )
 from .tokens import read_token
+from .ui_helpers import embed_html
 from .validation import submission_problems, normalize_roles, role_problems
-from .vault import Vault
+from .vault import Vault, shared_vault
 
 
 def _scroll_top(token: int) -> None:
-    components.html(
+    embed_html(
         f"""<script>
         /* nav:{token} */
         (function() {{
@@ -42,9 +43,7 @@ def _scroll_top(token: int) -> None:
               .forEach(function(s){{var e=d.querySelector(s); if(e) e.scrollTo(0,0);}});
           }} catch(e) {{}}
         }})();
-        </script>""",
-        height=0,
-    )
+        </script>""")
 
 
 def _scale_index(options: List[str], value) -> int | None:
@@ -68,7 +67,7 @@ def render_student_app(token: str) -> None:
     slug = payload.get("s", "")
     pos = int(payload.get("p", -1))
 
-    vault = Vault()
+    vault = shared_vault()
     snap = load_roster_snapshot(vault, slug)
     survey = load_survey(vault, slug)
     if not snap:
@@ -96,7 +95,7 @@ def render_student_app(token: str) -> None:
     # ---- working answers (session + vault draft) --------------------------
     akey = f"tf_ans::{slug}::{pos}"
     if akey not in st.session_state:
-        prior = load_response(vault, slug, pos) or {}
+        prior = load_work_in_progress(vault, slug, pos) or {}
         base = _blank_prefilled(me, snap)
         base.update({k: v for k, v in prior.items() if k in base})
         st.session_state[akey] = base
@@ -368,7 +367,7 @@ def _save_draft(vault, slug, pos, me, A):
     rec.update({"slug": slug, "pos": pos, "evaluator_key": name_key(me["name"]),
                 "complete": False})
     try:
-        save_response(vault, slug, pos, rec)
+        save_draft(vault, slug, pos, rec)
     except Exception:
         pass  # draft save is best-effort; session_state still holds answers
 
@@ -389,6 +388,7 @@ def _render_submit(vault, slug, pos, me, A, survey):
         })
         try:
             save_response(vault, slug, pos, rec)
+            clear_draft(vault, slug, pos)
             st.session_state[f"tf_submitted::{slug}::{pos}"] = True
             st.success("Thank you — your survey has been recorded."
                        + (" You may reopen this link to update it until the survey closes."
@@ -403,7 +403,7 @@ def _maybe_show_team(survey, slug, pos, me):
     if not survey.get("release_teams"):
         return
     from .formation_service import load_final, student_team_view
-    final = load_final(Vault(), slug)
+    final = load_final(shared_vault(), slug)
     if not final:
         return
     view = student_team_view(final, me["name"])

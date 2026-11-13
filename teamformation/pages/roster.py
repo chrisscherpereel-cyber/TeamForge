@@ -11,6 +11,7 @@ from .. import ingest
 from ..survey_service import token_secret, student_links, build_students
 from ..ui_helpers import email_send_panel, email_body_editor
 from .. import email_delivery as mail
+from ..ui_helpers import FULL_WIDTH, default_public_url, note_if_elsewhere
 
 _TEMPLATE_COLS = ["First Name", "Last Name", "Email", "Section"]
 _TEMPLATE_ROWS = [
@@ -90,7 +91,7 @@ def render(ctx):
                    "section": s.get("section", ""), "excluded": s.get("excluded", False)}
             row.update(s.get("extra", {}))   # preserved extra columns
             disp.append(row)
-        st.dataframe(pd.DataFrame(disp), use_container_width=True, height=280)
+        st.dataframe(pd.DataFrame(disp), **FULL_WIDTH, height=280)
         no_email = [m["name"] for m in students if not m.get("email")]
         if no_email:
             st.warning(f"{len(no_email)} student(s) have no email and can't be emailed a "
@@ -119,13 +120,15 @@ def render(ctx):
     # ---- Send links ------------------------------------------------------
     st.divider()
     st.markdown("##### 3. Send personal survey links")
-    base_url = st.text_input("Public app URL", getattr(ctx.cfg, "public_url", "") or "",
+    base_url = st.text_input("Public app URL", default_public_url(ctx.cfg),
                              key="inv_url",
-                             help="The deployed address, e.g. https://yourapp.streamlit.app")
+                             help="Filled in from the address you're using now. Change "
+                                  "it only if students should open a different deployment.")
+    note_if_elsewhere(base_url)
     links = student_links(base_url, ctx.slug, snap["students"], token_secret(ctx.cfg))
     with st.expander(f"Preview {len(links)} links"):
         st.dataframe(pd.DataFrame(links)[["name", "email", "link"]],
-                     use_container_width=True, height=260)
+                     **FULL_WIDTH, height=260)
     subj = st.text_input("Email subject", "Team-formation survey for {class}", key="inv_subj")
     _sample = {"first_name": "Alex", "name": "Alex Johnson", "class": ctx.course,
                "link": (links[0]["link"] if links else "https://…")}

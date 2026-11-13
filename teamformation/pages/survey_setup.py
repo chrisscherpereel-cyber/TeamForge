@@ -6,6 +6,7 @@ import datetime as dt
 import streamlit as st
 
 from .. import survey_service as svc
+from ..ui_helpers import FULL_WIDTH
 from ..survey_schema import (
     MAJORS, STANDINGS, SUBJECT_EXPERIENCE, WORK_EXPERIENCE, MEETING_FORMAT,
     TIMEZONES, DAYS, TIME_BLOCKS, WEEKLY_TIME, SKILLS, SKILL_SCALE, ROLES,
@@ -181,6 +182,15 @@ def _render_preview(cur):
           cq.get("options")); n += 1
 
 
+def _browser_clock_offset():
+    """Minutes the viewer's clock is ahead of the server's, or None."""
+    try:
+        from ..webcontext import clock_offset_minutes
+        return clock_offset_minutes(getattr(st, "context", None))
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def render(ctx):
     vault = ctx.vault
     st.subheader("Survey setup")
@@ -225,10 +235,47 @@ def render(ctx):
     cur["is_open"] = st.toggle("Accept submissions (master switch)",
                                value=cur.get("is_open", True))
     with st.expander("Schedule — open / close dates (optional)"):
-        st.caption(f"Server clock now: **{dt.datetime.now():%b %d, %Y %I:%M %p}**.")
+        # ---- whose clock? ------------------------------------------------
+        # The server's clock is UTC on Streamlit Cloud: "closes Friday 5pm" set
+        # by an instructor in Arizona used to mean 5pm UTC — 10am their time.
+        # The clock is now something the instructor states (the browser offers
+        # the right answer), and every open/close time is read against it.
+        _ck = f"clock::{ctx.slug}"
+        _browser_offset = _browser_clock_offset()
+        if st.session_state.get(_ck) is not None:
+            cur[svc.CLOCK_KEY] = st.session_state[_ck]
+        elif cur.get(svc.CLOCK_KEY) is None and _browser_offset is not None:
+            cur[svc.CLOCK_KEY] = _browser_offset
+        st.caption(svc.describe_clock(cur))
+        _server_now = dt.datetime.now()
+        ck1, ck2 = st.columns([1, 1.3])
+        _stated = ck1.time_input(
+            "What time is it where you are?",
+            svc.local_now(cur).time().replace(second=0, microsecond=0),
+            key="clock_now",
+            help="Open and close times are compared against this clock. Without "
+                 "it they are read in the server's own time zone, usually UTC.")
+        if ck2.button("Set this as my clock", key="clock_set", **FULL_WIDTH):
+            st.session_state[_ck] = svc.offset_from_wall_clock(
+                dt.datetime.combine(_server_now.date(), _stated), _server_now)
+            st.rerun()
+        if svc.clock_offset(cur) and ck2.button("Use the server's clock instead",
+                                                key="clock_reset", **FULL_WIDTH):
+            st.session_state[_ck] = 0
+            st.rerun()
+        if (_browser_offset is not None
+                and svc.clock_offset(cur) != _browser_offset):
+            st.caption("Your browser says it is "
+                       f"{(_server_now + dt.timedelta(minutes=_browser_offset)):%I:%M %p}"
+                       " where you are.")
+        st.caption("Every time below is on that clock — so is what students see. "
+                   "**Save survey settings** to apply a clock change.")
+        st.divider()
+
+        _local_now = svc.local_now(cur)
         use_open = st.checkbox("Set an OPEN date", value=bool(cur.get("opens_at")))
         if use_open:
-            o = svc.parse_dt(cur.get("opens_at")) or dt.datetime.now()
+            o = svc.parse_dt(cur.get("opens_at")) or _local_now
             a, b = st.columns(2)
             od = a.date_input("Opens on", o.date(), key="o_d")
             ot = b.time_input("Opens at", o.time().replace(microsecond=0), key="o_t")
@@ -237,7 +284,7 @@ def render(ctx):
             cur["opens_at"] = ""
         use_close = st.checkbox("Set a CLOSE date", value=bool(cur.get("closes_at")))
         if use_close:
-            c = svc.parse_dt(cur.get("closes_at")) or (dt.datetime.now() + dt.timedelta(days=7))
+            c = svc.parse_dt(cur.get("closes_at")) or (_local_now + dt.timedelta(days=7))
             a, b = st.columns(2)
             cd = a.date_input("Closes on", c.date(), key="c_d")
             ct = b.time_input("Closes at", c.time().replace(microsecond=0), key="c_t")
@@ -260,4 +307,5 @@ def render(ctx):
         else:
             from ..survey_service import key_survey, _save_json
             _save_json(vault, key_survey(ctx.slug), cur)
+        st.session_state.pop(f"clock::{ctx.slug}", None)
         st.success("Saved survey settings.")

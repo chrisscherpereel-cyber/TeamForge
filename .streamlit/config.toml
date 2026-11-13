@@ -1,0 +1,13 @@
+[runner]
+# This app never relies on Streamlit "magic" (bare expressions printed to the
+# page), so it is off: a stray line can't print something to an instructor.
+magicEnabled = false
+# A rerun already in flight is abandoned when the instructor clicks something
+# else, so a burst of clicks doesn't queue a burst of full reruns.
+fastReruns = true
+
+[client]
+showErrorDetails = true
+
+[browser]
+gatherUsageStats = false

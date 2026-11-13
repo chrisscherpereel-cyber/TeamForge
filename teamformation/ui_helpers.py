@@ -18,13 +18,80 @@ from . import email_delivery as mail
 from .config import AppConfig
 
 
+# Streamlit renamed `use_container_width=True` to `width="stretch"` and set a
+# removal date for the old spelling that has now passed, while the older
+# versions requirements.txt still allows only understand the old one. So the
+# spelling is decided once, here, by asking the installed Streamlit which
+# argument it takes — rather than shipping a call that a routine upgrade turns
+# into a traceback, or dropping support for the older versions.
+def _detect_width_kwargs() -> dict:
+    try:
+        import inspect
+        if "width" in inspect.signature(st.button).parameters:
+            return {"width": "stretch"}
+    except Exception:  # noqa: BLE001
+        pass
+    return {"use_container_width": True}
+
+
+FULL_WIDTH = _detect_width_kwargs()
+
+
+def embed_html(markup: str) -> None:
+    """Put a snippet of HTML/JS on the page, as invisibly as possible.
+
+    `st.components.v1.html` is deprecated with a removal date that has passed,
+    so a future Streamlit upgrade would break any page that calls it.
+    `st.iframe` is the replacement, but it rejects the `height=0` the old call
+    accepted, so the two cannot simply be swapped. Whichever is available is
+    used; if neither works the only consequence is a missing nicety (e.g. the
+    page does not scroll itself).
+    """
+    iframe = getattr(st, "iframe", None)
+    if iframe is not None:
+        try:
+            iframe(markup, height=1)
+            return
+        except Exception:  # noqa: BLE001
+            pass
+    try:
+        import streamlit.components.v1 as components
+        components.html(markup, height=0)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def this_app_url() -> str:
+    """Where this page is open (no query string), or "" when unknown.
+    See teamformation.webcontext."""
+    try:
+        from .webcontext import app_url
+        return app_url(getattr(st, "context", None))
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def default_public_url(cfg) -> str:
+    """The address student links should point at: the configured public_url if
+    one is set, otherwise the address the instructor is using right now."""
+    return (getattr(cfg, "public_url", "") or "").strip() or this_app_url()
+
+
+def note_if_elsewhere(base_url: str) -> None:
+    """Say so when links would send students somewhere other than this app."""
+    here = this_app_url()
+    if here and base_url.strip() and base_url.strip().rstrip("/") != here:
+        st.caption(f"ℹ️ Links will point to **{base_url.strip()}**, but you are using "
+                   f"this app at **{here}** — students will be sent somewhere else.")
+
+
 def render_pdf(pdf_bytes: bytes) -> None:
     try:
         import fitz  # PyMuPDF
         doc = fitz.open(stream=pdf_bytes, filetype="pdf")
         for page in doc:
             pix = page.get_pixmap(dpi=120)
-            st.image(pix.tobytes("png"), use_container_width=True)
+            st.image(pix.tobytes("png"), **FULL_WIDTH)
         return
     except Exception:
         pass
