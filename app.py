@@ -186,6 +186,19 @@ with st.sidebar:
 
     # Drop carried-over per-course state when the active course changes.
     _active_slug = svc.slugify(course, label)
+    # Warm the cache for this course in one go. Every tab reads some of these on
+    # every rerun; on cloud storage each read is an HTTPS round trip, and once the
+    # one-minute cache had lapsed they went out one after another. Only objects the
+    # listing says exist are fetched, so a new course costs nothing here.
+    try:
+        from teamformation import formation_service as _fsvc
+        _present = set(vault.list())
+        vault.prefetch([k for k in (svc.key_roster(_active_slug), svc.key_survey(_active_slug),
+                                    _fsvc.key_config(_active_slug), _fsvc.key_proposed(_active_slug),
+                                    _fsvc.key_final(_active_slug), accounts.ACCOUNTS_KEY)
+                        if k in _present])
+    except Exception:  # noqa: BLE001 - each page's own read reports problems
+        pass
     if S.get("_active_slug") not in (None, _active_slug):
         for _k in list(S.keys()):
             if str(_k).startswith(("design::", "roster_df::")):
@@ -198,34 +211,77 @@ with st.sidebar:
         with st.expander("👥 Manage instructors"):
             accts = accounts.load_accounts()
             st.caption(f"{len(accts)} stored account(s), plus the built-in `admin`.")
+            st.markdown("**Add an instructor**")
             nu = st.text_input("Username", key="acct_new_user")
             nn = st.text_input("Display name", key="acct_new_name")
             nr = st.selectbox("Role", ["instructor", "admin"], key="acct_new_role")
-            npw = st.text_input("Temporary password", value="TeamForge-Welcome",
-                                key="acct_new_pw")
+            # The temporary password used to be prefilled with "TeamForge-Welcome",
+            # which is in this public repository's source. `must_change` forces a
+            # new one only *after* sign-in, so anyone who knew an instructor's
+            # username could sign in first, set their own password, lock the
+            # instructor out and read their students' records.
+            npw = st.text_input(
+                "Temporary password (optional)", key="acct_new_pw", type="password",
+                placeholder="Leave blank and one is generated",
+                help=f"At least {accounts.MIN_PASSWORD} characters. Leave it blank and "
+                     "TeamForge makes a random one and shows it to you once. They "
+                     "choose their own at first sign-in.")
             if st.button("Add instructor", key="acct_add"):
+                _temp = npw or accounts.new_temp_password()
                 try:
-                    accounts.add_account(nu, nn, nr, npw or "TeamForge-Welcome")
-                    st.success(f"Added `{nu}`.")
+                    accounts.add_account(nu, nn, nr, _temp)
+                    st.success(f"Added `{nu}`. Give them username `{nu}` and the "
+                               "temporary password — it is shown this once, and "
+                               "they choose their own at first sign-in.")
+                    if not npw:
+                        st.code(_temp, language=None)
                 except Exception as exc:  # noqa: BLE001
                     st.error(str(exc))
             if accts:
+                st.markdown("**Manage an account**")
                 who = st.selectbox("Account", list(accts), key="acct_pick")
+                # Acting on your own account from here — demoting, deactivating
+                # or removing yourself — locks you out of the panel you are
+                # standing in. Your own password is changed above.
+                _self = who == user.get("user")
+                if _self:
+                    st.caption("That is your own account. Change your password above; "
+                               "the rest is left to another admin.")
                 a1, a2 = st.columns(2)
-                if a1.button("Reset password", key="acct_reset"):
-                    accounts.set_password(who, "TeamForge-Welcome", must_change=True)
-                    st.success("Reset to `TeamForge-Welcome`.")
-                if a2.button("Toggle role", key="acct_role"):
+                if a1.button("Reset password", key="acct_reset", disabled=_self):
+                    _temp = accounts.new_temp_password()
+                    try:
+                        accounts.set_password(who, _temp, must_change=True)
+                        st.success(f"`{who}`'s password is reset. Give them this "
+                                   "temporary one — shown once — and they choose "
+                                   "their own at next sign-in.")
+                        st.code(_temp, language=None)
+                    except Exception as exc:  # noqa: BLE001
+                        st.error(str(exc))
+                if a2.button("Toggle role", key="acct_role", disabled=_self):
                     accounts.set_role(who, "instructor"
                                       if accts[who].get("role") == "admin" else "admin")
                     st.success("Role changed.")
                 a3, a4 = st.columns(2)
                 if a3.button(("Deactivate" if accts[who].get("active", True) else "Activate"),
-                             key="acct_active"):
+                             key="acct_active", disabled=_self):
                     accounts.set_active(who, not accts[who].get("active", True))
                     st.success("Updated.")
-                if a4.button("Remove", key="acct_remove"):
-                    accounts.remove_account(who); st.success(f"Removed `{who}`.")
+                # One click used to delete an account outright. It asks now.
+                if S.get("acct_confirm_remove") == who:
+                    st.warning(f"Remove `{who}` for good? Their courses stay, but they "
+                               "can no longer sign in.", icon="⚠️")
+                    r1, r2 = st.columns(2)
+                    if r1.button("Yes, remove", key="acct_remove_yes", type="primary"):
+                        accounts.remove_account(who)
+                        S.pop("acct_confirm_remove", None)
+                        st.success(f"Removed `{who}`.")
+                    if r2.button("Keep them", key="acct_remove_no"):
+                        S.pop("acct_confirm_remove", None)
+                        st.rerun()
+                elif a4.button("Remove", key="acct_remove", disabled=_self):
+                    S["acct_confirm_remove"] = who
+                    st.rerun()
 
 _scroll_to_top()
 

@@ -220,7 +220,6 @@ def c_response(team, ctx=None):
 
 
 def c_avoid_repeats(team, ctx=None):
-    keys = {s["key"] for s in team}
     pairs = 0
     repeats = 0
     for i in range(len(team)):
@@ -404,7 +403,6 @@ def team_warnings(team: List[dict], team_name: str, cannot_pairs=None) -> List[s
     if sched is not None and sched < 0.34:
         warns.append(f"{team_name} has poor schedule overlap.")
     # repeated teammates
-    keys = [s["key"] for s in team]
     repeats = 0
     for i in range(len(team)):
         for j in range(i + 1, len(team)):

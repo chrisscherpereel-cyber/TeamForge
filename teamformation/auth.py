@@ -42,8 +42,9 @@ def require_login() -> bool:
         return False
 
     with st.form("pp_login", clear_on_submit=False):
-        username = st.text_input("Username", value="", placeholder="your username")
-        pw = st.text_input("Password", type="password")
+        username = st.text_input("Username", value="", placeholder="your username",
+                                 key="tf_login_user")
+        pw = st.text_input("Password", type="password", key="tf_login_pw")
         submitted = st.form_submit_button("Sign in")
 
     if submitted:
@@ -66,9 +67,9 @@ def _force_password_change(user) -> bool:
     st.subheader("Choose your password")
     st.info(f"Welcome, {user.get('name')}. You signed in with a temporary password — "
             "pick your own before continuing. Nobody else will know it.")
-    n1 = st.text_input("New password", type="password")
-    n2 = st.text_input("Confirm", type="password")
-    if st.button("Set password", type="primary"):
+    n1 = st.text_input("New password", type="password", key="tf_newpw1")
+    n2 = st.text_input("Confirm", type="password", key="tf_newpw2")
+    if st.button("Set password", type="primary", key="tf_setpw"):
         if n1 != n2:
             st.error("Those don't match.")
         elif len(n1) < 8:
@@ -81,7 +82,7 @@ def _force_password_change(user) -> bool:
                 st.rerun()
             except Exception as exc:  # noqa: BLE001
                 st.error(str(exc))
-    if st.button("Sign out"):
+    if st.button("Sign out", key="tf_forcepw_signout"):
         logout(); st.rerun()
     return False
 

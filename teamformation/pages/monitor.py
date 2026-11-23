@@ -7,7 +7,7 @@ import streamlit as st
 from .. import survey_service as svc
 from ..survey_service import token_secret
 from ..tokens import make_token
-from ..ui_helpers import email_send_panel, email_body_editor
+from ..ui_helpers import email_composer
 from .. import email_delivery as mail
 from ..ui_helpers import FULL_WIDTH, default_public_url
 
@@ -38,7 +38,7 @@ def render(ctx):
     if st.button("↻ Check for new responses", key="resp_refresh",
                  help="Stored data is re-read at most once a minute so clicks stay "
                       "fast. This re-reads it now."):
-        vault.refresh()
+        vault.refresh(svc.response_prefixes(ctx.slug))
         st.rerun()
     latest = svc.latest_submission(vault, ctx.slug)
     if latest:
@@ -82,22 +82,37 @@ def render(ctx):
                                  st.session_state.get("inv_url")
                                  or default_public_url(ctx.cfg),
                                  key="rem_url")
-        subj = st.text_input("Subject", "Reminder: team-formation survey for {class}",
-                             key="rem_subj")
-        body = email_body_editor("rem_body", REMINDER,
-                                 {"first_name": "Alex", "class": ctx.course,
-                                  "link": "https://…"})
         secret = token_secret(ctx.cfg)
         sep = "&" if "?" in (base_url or "") else "?"
-        messages = []
+        course = ctx.course
+        recips = []
         for r in nonresp:
-            if not r["email"]:
-                continue
             tok = make_token({"s": ctx.slug, "p": r["pos"]}, secret)
-            link = f"{base_url}{sep}t={tok}" if base_url else f"?t={tok}"
-            cx = {"first_name": r["name"].split(" ")[0], "class": ctx.course, "link": link}
-            messages.append(mail.Message(
-                to_email=r["email"], to_name=r["name"], team="",
-                subject=mail.render_template(subj, cx),
-                body=mail.render_template(body, cx), attachments=[]))
-        email_send_panel("rem", messages, ctx.cfg, label="reminders")
+            recips.append({**r, "link": f"{base_url}{sep}t={tok}" if base_url else f"?t={tok}"})
+        no_email = [r["name"] for r in recips if not r["email"]]
+        if no_email:
+            st.caption("No email address for: " + ", ".join(no_email[:10])
+                       + ("…" if len(no_email) > 10 else ""))
+
+        def _build(subj_t: str, body_t: str):
+            out = []
+            for r in recips:
+                if not r["email"]:
+                    continue
+                cx = {"first_name": r["name"].split(" ")[0], "name": r["name"],
+                      "class": course, "link": r["link"]}
+                out.append(mail.Message(
+                    to_email=r["email"], to_name=r["name"], team="",
+                    subject=mail.render_template(subj_t, cx),
+                    body=mail.render_template(body_t, cx), attachments=[]))
+            return out
+
+        first = recips[0]
+        email_composer("rem", subject_default="Reminder: team-formation survey for {class}",
+                       body_default=REMINDER, build=_build,
+                       sample_ctx={"first_name": first["name"].split(" ")[0],
+                                   "name": first["name"], "class": course,
+                                   "link": first["link"]},
+                       placeholders=["first_name", "name", "class", "link"], cfg=ctx.cfg,
+                       survey_cfg=svc.load_survey(vault, ctx.slug), label="reminders",
+                       subject_key="rem_subj")

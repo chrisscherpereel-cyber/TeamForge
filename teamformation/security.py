@@ -72,7 +72,7 @@ def decrypt_dataframe(token: bytes) -> pd.DataFrame:
 
 def _has_parquet() -> bool:
     try:
-        import pyarrow  # noqa: F401
-        return True
-    except Exception:
+        import importlib.util
+        return importlib.util.find_spec("pyarrow") is not None
+    except Exception:  # noqa: BLE001
         return False

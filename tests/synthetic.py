@@ -1,7 +1,6 @@
 """Synthetic student generators for tests."""
 from __future__ import annotations
 
-import random
 
 from teamformation.survey_schema import DAYS, TIME_BLOCKS, SKILLS, WORKSTYLE, MAJORS
 
@@ -37,7 +36,7 @@ def make_student(pos, name=None, responded=True, **overrides):
 
 
 def cohort(n, seed=0, **kw):
-    rng = random.Random(seed)
+
     out = []
     for i in range(n):
         out.append(make_student(i, **kw))

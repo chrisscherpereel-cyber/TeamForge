@@ -16,7 +16,7 @@ import io
 import re
 import zipfile
 from email.message import EmailMessage
-from typing import Dict, List, Tuple
+from typing import List
 
 from . import email_delivery as mail
 
@@ -26,9 +26,13 @@ def _safe(s) -> str:
 
 
 def _strip_html(h: str) -> str:
-    t = re.sub(r"<br\s*/?>", "\n", h or "")
-    t = re.sub(r"</p>", "\n\n", t)
-    return re.sub(r"<[^>]+>", "", t).replace("&nbsp;", " ").strip()
+    """Plain text for the Mac script, keeping every link's address.
+
+    The old version dropped tags wholesale, so `<a href="{link}">Open my
+    survey</a>` arrived as the words "Open my survey" with nowhere to go
+    (PeerParley 2.19.0 found and fixed the same thing)."""
+    from .webmail import plain_text
+    return plain_text(h)
 
 
 def _b64(s: str) -> str:

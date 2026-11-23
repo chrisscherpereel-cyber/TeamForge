@@ -8,8 +8,8 @@ import streamlit as st
 
 from .. import survey_service as svc
 from .. import ingest
-from ..survey_service import token_secret, student_links, build_students
-from ..ui_helpers import email_send_panel, email_body_editor
+from ..survey_service import token_secret, student_links
+from ..ui_helpers import email_composer
 from .. import email_delivery as mail
 from ..ui_helpers import FULL_WIDTH, default_public_url, note_if_elsewhere
 
@@ -62,12 +62,24 @@ def render(ctx):
     st.caption("Uploading **saves immediately** to the vault, so the roster is recalled "
                "automatically whenever you reopen this course.")
     survey_cfg = svc.load_survey(vault, ctx.slug)
-    up = st.file_uploader("Roster (CSV/XLSX)", type=["csv", "xlsx", "xls"], key="roster_up")
+    # The uploader is keyed per course. With one key for every course, the file
+    # stayed in the uploader when the instructor switched course — and since an
+    # upload saves at once, the previous course's roster was imported into the
+    # next course opened. (PeerParley_AI 2.17.1 hit the same Streamlit trait:
+    # a file uploader can only be emptied by giving it a new key.)
+    up = st.file_uploader("Roster (CSV/XLSX)", type=["csv", "xlsx", "xls"],
+                          key=f"roster_up::{ctx.slug}")
     if up is not None:
         sig = f"{up.name}:{up.size}"
         if S.get(f"roster_sig::{ctx.slug}") != sig:
             try:
                 df = ingest.read_table(up, up.name)
+                if not svc.build_students(df):
+                    raise ingest.InputError(
+                        "No student names found in that file. TeamForge looks for "
+                        "**First Name** and **Last Name** columns, or a single "
+                        "**Name** column; this file's columns are: "
+                        + ", ".join(f"`{c}`" for c in df.columns[:12]) + ".")
                 existing = svc.load_roster_snapshot(vault, ctx.slug)
                 stamp = ctx.user["user"] if (existing is None or not existing.get("owner")) else None
                 slug, students = svc.save_setup(ctx.course, ctx.label, df, survey_cfg, owner=stamp)
@@ -75,6 +87,8 @@ def render(ctx):
                 st.success(f"Imported and saved {len(students)} student(s)."
                            + (" Existing positions were preserved and new students appended."
                               if existing else ""))
+            except ingest.InputError as exc:
+                st.error(str(exc))
             except Exception as exc:  # noqa: BLE001
                 st.error(f"Couldn't read/save that file: {exc}")
 
@@ -129,22 +143,30 @@ def render(ctx):
     with st.expander(f"Preview {len(links)} links"):
         st.dataframe(pd.DataFrame(links)[["name", "email", "link"]],
                      **FULL_WIDTH, height=260)
-    subj = st.text_input("Email subject", "Team-formation survey for {class}", key="inv_subj")
-    _sample = {"first_name": "Alex", "name": "Alex Johnson", "class": ctx.course,
-               "link": (links[0]["link"] if links else "https://…")}
-    body = email_body_editor("inv_body", DEFAULT_INVITE, _sample)
     if not base_url.strip():
         st.warning("Enter the public app URL so the links have a destination.")
-    messages = []
-    for r in links:
-        if not r.get("email"):
-            continue
-        cx = {"first_name": r["name"].split(" ")[0], "name": r["name"],
-              "class": ctx.course, "link": r.get("link", "")}
-        messages.append(mail.Message(
-            to_email=r["email"], to_name=r["name"], team="",
-            subject=mail.render_template(subj, cx),
-            body=mail.render_template(body, cx), attachments=[]))
+    course = ctx.course
+
+    def _build(subj_t: str, body_t: str):
+        out = []
+        for r in links:
+            if not r.get("email"):
+                continue
+            cx = {"first_name": r["name"].split(" ")[0], "name": r["name"],
+                  "class": course, "link": r.get("link", "")}
+            out.append(mail.Message(
+                to_email=r["email"], to_name=r["name"], team="",
+                subject=mail.render_template(subj_t, cx),
+                body=mail.render_template(body_t, cx), attachments=[]))
+        return out
+
+    first = links[0] if links else {"name": "Alex Johnson", "link": "https://…"}
+    _sample = {"first_name": first["name"].split(" ")[0], "name": first["name"],
+               "class": course, "link": first.get("link") or "https://…"}
     csv_rows = [{"Name": r["name"], "Email": r.get("email", ""), "Link": r["link"]}
                 for r in links]
-    email_send_panel("inv", messages, ctx.cfg, csv_rows=csv_rows, label="invitations")
+    email_composer("inv", subject_default="Team-formation survey for {class}",
+                   body_default=DEFAULT_INVITE, build=_build, sample_ctx=_sample,
+                   placeholders=["first_name", "name", "class", "link"], cfg=ctx.cfg,
+                   survey_cfg=survey_cfg, csv_rows=csv_rows, label="invitations",
+                   subject_label="Email subject", subject_key="inv_subj")

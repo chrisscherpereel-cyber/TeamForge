@@ -289,7 +289,6 @@ def _render_teams(ctx, design, weights, cannot):
         with st.expander(f"**{design['names'][i]}** — {len(team)} members{flag}",
                          expanded=(len(design["teams"]) <= 6)):
             for m in team:
-                p = scoring.parse_student(m)
                 major = m.get("major") or ("no survey response" if not m.get("responded") else "—")
                 st.write(f"• {m['name']} — {major}")
             prof = _profile(team)

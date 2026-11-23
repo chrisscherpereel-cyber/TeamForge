@@ -7,10 +7,12 @@ into a student email.
 """
 from __future__ import annotations
 
+import hashlib
 import io
+import re
 import zipfile
 from email.message import EmailMessage
-from typing import Dict, List, Optional
+from typing import Callable, Dict, Iterable, List, Optional
 
 import streamlit as st
 
@@ -85,17 +87,18 @@ def note_if_elsewhere(base_url: str) -> None:
                    f"this app at **{here}** — students will be sent somewhere else.")
 
 
-def render_pdf(pdf_bytes: bytes) -> None:
-    try:
-        import fitz  # PyMuPDF
-        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-        for page in doc:
-            pix = page.get_pixmap(dpi=120)
-            st.image(pix.tobytes("png"), **FULL_WIDTH)
-        return
-    except Exception:
-        pass
-    st.download_button("⬇ Download PDF", pdf_bytes, "preview.pdf", "application/pdf")
+def as_fragment(fn):
+    """`st.fragment` where this Streamlit has it, otherwise the plain function.
+
+    A widget inside a fragment reruns only the fragment, not the whole page.
+    That matters most for the email composers: the formatting toolbar reports
+    the text 200 ms after every pause in typing, and each report used to rerun
+    every tab — the team designer's diagnostics included — and grey the page
+    out while it did. requirements.txt allows Streamlit from 1.36; `st.fragment`
+    arrived in 1.37, hence the fallback. (From PeerParley_AI 2.19.2.)
+    """
+    frag = getattr(st, "fragment", None)
+    return frag(fn) if callable(frag) else fn
 
 
 def _members_html(members: List[dict], exclude_name: str) -> str:
@@ -151,31 +154,169 @@ def eml_zip(messages: List[mail.Message], sender: str = "") -> bytes:
     return buf.getvalue()
 
 
-def email_body_editor(key: str, default_html: str, sample_ctx: dict,
-                      height: int = 200) -> str:
-    """A WYSIWYG-style email body editor with a live rendered preview.
+# --------------------------------------------------------------------------- #
+# Email composition (from PeerParley_AI 2.16.1 / 2.18.0 / 2.19.x)
+# --------------------------------------------------------------------------- #
+NOT_SCHEDULED = "TBA"
+DATE_PLACEHOLDERS = {"open_date": "opens_at", "close_date": "closes_at"}
 
-    Uses the streamlit-quill rich-text editor when it's installed; otherwise falls
-    back to an HTML text box. Either way, a live preview underneath shows exactly
-    how the message will look with sample values substituted, so the instructor
-    edits against a real rendering rather than raw HTML.
+# Quill's toolbar, trimmed to what survives a real mail client. Fonts, colours
+# and embedded media render badly in Outlook or are stripped, so they are left
+# out rather than offered and silently lost.
+TOOLBAR = [["bold", "italic", "underline"],
+           [{"list": "ordered"}, {"list": "bullet"}],
+           ["link"], ["clean"]]
+
+_PLACEHOLDER = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")
+
+
+def when(value) -> str:
+    """A schedule time as a student should read it: "Friday, November 20, 2026
+    at 5:00 PM" — the weekday because that is how people remember a deadline,
+    the time because "by Friday" alone is ambiguous. On the survey's own
+    scheduling clock, so the email and the form agree."""
+    from .survey_service import parse_dt
+    d = parse_dt(value)
+    if d is None:
+        return ""
+    hour = d.strftime("%I").lstrip("0") or "12"
+    return f"{d:%A, %B} {d.day}, {d.year} at {hour}:{d:%M %p}"
+
+
+def date_ctx(survey_cfg: Optional[dict]) -> Dict[str, str]:
+    """{"open_date": …, "close_date": …} from the SAVED survey; TBA if unset."""
+    cfg = survey_cfg or {}
+    return {ph: (when(cfg.get(field)) or NOT_SCHEDULED)
+            for ph, field in DATE_PLACEHOLDERS.items()}
+
+
+def unknown_placeholders(templates: Iterable[str], known: Iterable[str]) -> List[str]:
+    """Braced names nothing will fill in — `{firstname}` for `{first_name}`.
+    Without this check they went out to every student exactly as typed."""
+    known = set(known)
+    found: List[str] = []
+    for t in templates:
+        for m in _PLACEHOLDER.finditer(t or ""):
+            if m.group(1) not in known and m.group(1) not in found:
+                found.append(m.group(1))
+    return found
+
+
+def date_warnings(templates: Iterable[str], survey_cfg: Optional[dict]) -> List[str]:
+    """A date the message uses that the survey does not have would read "TBA"."""
+    text = " ".join(t or "" for t in templates)
+    out = []
+    for ph, field in DATE_PLACEHOLDERS.items():
+        if "{" + ph + "}" in text and not (survey_cfg or {}).get(field):
+            what = "open" if ph == "open_date" else "close"
+            out.append(f"The message uses `{{{ph}}}`, but the survey has no {what} date "
+                       f"set — it would read **{NOT_SCHEDULED}**. Set the date under "
+                       "**Survey → Schedule** and save, or remove the placeholder.")
+    return out
+
+
+def email_body_editor(key: str, default_html: str, sample_ctx: dict,
+                      height: int = 200, placeholders: Iterable[str] = ()) -> str:
+    """Write the email as it will look, with a rendered preview underneath.
+
+    Uses the streamlit-quill editor (a core requirement, so it is there on
+    Streamlit Cloud too) with a mail-safe toolbar; "Edit the HTML directly" is
+    there for markup someone already has, and is the fallback if the editor
+    cannot load. The stored and sent body is still HTML; the instructor just
+    no longer has to write it.
     """
-    st.caption("Placeholders like {first_name}, {team}, {members}, {class}, {link} are "
-               "filled in per student when sent.")
+    names = list(placeholders) or ["first_name", "team", "members", "class", "link"]
+    st.caption("Placeholders filled in per student: "
+               + ", ".join("{" + n + "}" for n in names))
     html = None
-    try:
-        from streamlit_quill import st_quill
-        html = st_quill(value=st.session_state.get(f"{key}_html", default_html),
-                        html=True, key=f"{key}_quill")
-        html = html or default_html
-    except Exception:
-        html = st.text_area("Email body", st.session_state.get(f"{key}_html", default_html),
+    raw = st.checkbox("Edit the HTML directly", key=f"{key}_raw")
+    if not raw:
+        try:
+            from streamlit_quill import st_quill
+            html = st_quill(value=st.session_state.get(f"{key}_html", default_html),
+                            html=True, toolbar=TOOLBAR, key=f"{key}_quill")
+            html = html or st.session_state.get(f"{key}_html", default_html)
+        except Exception:  # noqa: BLE001
+            html = None
+    if html is None:
+        html = st.text_area("Email body (HTML)",
+                            st.session_state.get(f"{key}_html", default_html),
                             height=height, key=f"{key}_ta")
     st.session_state[f"{key}_html"] = html
     with st.container(border=True):
-        st.caption("Live preview")
+        st.caption("Preview — as the first student receives it")
         st.markdown(mail.render_template(html, sample_ctx), unsafe_allow_html=True)
+        with st.expander("Plain-text version"):
+            from .webmail import plain_text
+            st.text(plain_text(mail.render_template(html, sample_ctx)))
     return html
+
+
+def _email_composer(key: str, *, subject_default: str, body_default: str,
+                    build: Callable[[str, str], List[mail.Message]],
+                    sample_ctx: dict, placeholders: List[str], cfg: AppConfig,
+                    survey_cfg: Optional[dict] = None, csv_rows=None,
+                    label: str = "emails", subject_label: str = "Subject",
+                    subject_key: Optional[str] = None) -> None:
+    """Subject, body, checks and delivery for one kind of email.
+
+    Runs as a fragment: typing reruns only this composer — editor, preview,
+    warnings and send options — not the whole app. Everything it needs from
+    storage is read by the page and passed in (`build` closes over it), so an
+    edit does no storage I/O at all.
+    """
+    dates = date_ctx(survey_cfg)
+    subj = st.text_input(subject_label, subject_default, key=subject_key or f"{key}_subj")
+    body = email_body_editor(f"{key}_body", body_default, {**sample_ctx, **dates},
+                             placeholders=placeholders + list(DATE_PLACEHOLDERS))
+    bad = unknown_placeholders([subj, body], list(placeholders) + list(DATE_PLACEHOLDERS))
+    if bad:
+        st.warning("Not a placeholder TeamForge fills in, so it would reach students "
+                   "exactly as typed: " + ", ".join("`{" + b + "}`" for b in bad)
+                   + ". The ones that work: "
+                   + ", ".join("`{" + n + "}`" for n in placeholders + list(DATE_PLACEHOLDERS))
+                   + ".", icon="⚠️")
+    for w in date_warnings([subj, body], survey_cfg):
+        st.warning(w, icon="📅")
+    subj_t = mail.render_template(subj, dates)
+    body_t = mail.render_template(body, dates)
+    email_send_panel(key, build(subj_t, body_t), cfg, csv_rows=csv_rows, label=label)
+
+
+email_composer = as_fragment(_email_composer)
+
+
+def webmail_panel(key: str, messages: List[mail.Message]) -> None:
+    """One "open in web mail" button per student, with a tick to keep count.
+
+    For instructors who work in the browser and cannot get a Microsoft 365 app
+    registration from IT. Nothing is sent from here: each button opens a
+    pre-filled message in Outlook on the web or Gmail, in their own mailbox,
+    and they press Send there. (From PeerParley_AI 2.19.0.)
+    """
+    from . import webmail
+    provider = st.radio("Which web mail do you use?", list(webmail.PROVIDERS),
+                        key=f"{key}_wm_p", horizontal=True,
+                        captions=list(webmail.PROVIDERS.values()))
+    st.caption("✓ Nothing is sent by this method. Each button opens a new message in "
+               f"{provider}, in a new browser tab, with the address, subject and text "
+               "filled in — read it and press **Send** there. Sign in to the right "
+               "account first. The message is plain text: formatting is dropped, but "
+               "every link is written out in full so it still works.")
+    done = []
+    for m in messages:
+        tick = f"{key}_wm_sent_" + hashlib.sha1(
+            m.to_email.strip().lower().encode()).hexdigest()[:12]
+        done.append(tick)
+        c1, c2 = st.columns([4, 1], vertical_alignment="center")
+        c1.link_button(f"✉️ {m.to_name} — {m.to_email}",
+                       webmail.compose_url(provider, m.to_email, m.subject, m.body),
+                       **FULL_WIDTH)
+        c2.checkbox("Sent", key=tick)
+    n = sum(1 for k in done if st.session_state.get(k))
+    st.caption(f"**{n} of {len(messages)}** ticked as sent. The ticks are only a "
+               "checklist for this visit — they are not saved, and they don't check "
+               "your mailbox.")
 
 
 def email_send_panel(key: str, messages: List[mail.Message], cfg: AppConfig,
@@ -187,6 +328,7 @@ def email_send_panel(key: str, messages: List[mail.Message], cfg: AppConfig,
         return
     method = st.selectbox("How do you want to send?",
                           ["Microsoft 365 — send now", "SMTP — send now",
+                           "Open in web mail — Outlook or Gmail",
                            "Download auto-send scripts (Mac / Windows)",
                            "Download .eml files", "Download recipients CSV"],
                           key=f"{key}_method")
@@ -199,7 +341,7 @@ def email_send_panel(key: str, messages: List[mail.Message], cfg: AppConfig,
         if st.button("Send now", type="primary", key=f"{key}_go"):
             import dataclasses
             c = dataclasses.replace(cfg, email=dataclasses.replace(cfg.email, mode=mode))
-            mailer = make_mailer(c)
+            mailer = make_mailer(c, key=key)
             if mailer is not None:
                 prog = st.progress(0.0); log = st.empty(); lines = []
 
@@ -214,13 +356,16 @@ def email_send_panel(key: str, messages: List[mail.Message], cfg: AppConfig,
                 if res["failed"]:
                     import pandas as pd
                     st.dataframe(pd.DataFrame(res["failed"]))
+    elif method.startswith("Open in web mail"):
+        webmail_panel(key, messages)
     elif method.startswith("Download auto-send"):
         from . import emailpack
         if st.button("Build auto-send scripts", key=f"{key}_auto"):
             st.session_state[f"{key}_autobytes"] = emailpack.send_all_pack(messages, label)
         if st.session_state.get(f"{key}_autobytes"):
             st.download_button("⬇ Download auto-send zip", st.session_state[f"{key}_autobytes"],
-                               f"{label}_autosend.zip", "application/zip")
+                               f"{label}_autosend.zip", "application/zip",
+                               key=f"{key}_autodl")
             st.caption("Unzip, then **double-click** `Send emails (Windows).cmd` on Windows "
                        "or `send_all_mac.applescript` on Mac. Sends from your own "
                        "Outlook / Apple Mail — no server setup needed.")
@@ -230,15 +375,15 @@ def email_send_panel(key: str, messages: List[mail.Message], cfg: AppConfig,
             st.session_state[f"{key}_emlbytes"] = emailpack.eml_zip(messages, label)
         if st.session_state.get(f"{key}_emlbytes"):
             st.download_button("⬇ Download .eml zip", st.session_state[f"{key}_emlbytes"],
-                               f"{label}_eml.zip", "application/zip")
+                               f"{label}_eml.zip", "application/zip", key=f"{key}_emldl")
     else:
         import pandas as pd
         rows = csv_rows or [{"To": m.to_email, "Subject": m.subject} for m in messages]
         st.download_button("⬇ Download recipients CSV", pd.DataFrame(rows).to_csv(index=False),
-                           f"{label}_recipients.csv", "text/csv")
+                           f"{label}_recipients.csv", "text/csv", key=f"{key}_csvdl")
 
 
-def make_mailer(cfg: AppConfig):
+def make_mailer(cfg: AppConfig, key: str = "mail"):
     """Return a ready mailer, driving the Graph device-code flow in the UI.
     (Reused from the original application.)"""
     if cfg.email.mode == "smtp":
@@ -265,7 +410,7 @@ def make_mailer(cfg: AppConfig):
     flow = st.session_state["graph_flow"]
     st.info(flow.get("message", "Complete sign-in in your browser."))
     st.code(f"{flow.get('verification_uri')}\nCode: {flow.get('user_code')}")
-    if st.button("I've completed sign-in"):
+    if st.button("I've completed sign-in", key=f"{key}_graph_done"):
         if gm.complete_device_flow(flow):
             st.success("Microsoft 365 authenticated.")
             del st.session_state["graph_flow"]
