@@ -22,13 +22,13 @@ from .survey_schema import (
 )
 from .survey_service import (
     load_roster_snapshot, load_survey, load_work_in_progress, save_response,
-    save_draft, clear_draft,
-    token_secret, window_state, window_message, parse_dt,
+    save_draft, clear_draft, key_roster, key_survey, key_draft, key_response,
+    token_secret, window_state, window_message,
 )
 from .tokens import read_token
 from .ui_helpers import embed_html
 from .validation import submission_problems, normalize_roles, role_problems
-from .vault import Vault, shared_vault
+from .vault import shared_vault
 
 
 def _scroll_top(token: int) -> None:
@@ -68,6 +68,15 @@ def render_student_app(token: str) -> None:
     pos = int(payload.get("p", -1))
 
     vault = shared_vault()
+    # Everything this page reads, asked for together: a student on a phone
+    # used to wait for four round trips one after another (roster, questions,
+    # draft, earlier answers) before the form appeared.
+    if f"tf_ans::{slug}::{pos}" not in st.session_state:
+        try:
+            vault.prefetch([key_roster(slug), key_survey(slug),
+                            key_draft(slug, pos), key_response(slug, pos)])
+        except Exception:  # noqa: BLE001 - the reads below report problems
+            pass
     snap = load_roster_snapshot(vault, slug)
     survey = load_survey(vault, slug)
     if not snap:

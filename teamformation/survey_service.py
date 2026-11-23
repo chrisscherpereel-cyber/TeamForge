@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 
 import pandas as pd
@@ -27,7 +27,7 @@ from .config import load_config
 from .ingest import Roster, name_key
 from .survey_schema import DEFAULT_SURVEY, DAYS, SKILLS, WORKSTYLE
 from .tokens import make_token
-from .vault import Vault, shared_vault
+from .vault import SUMMARY_MAX_AGE, Vault, shared_vault
 
 
 # --------------------------------------------------------------------------- #
@@ -162,8 +162,17 @@ def _save_json(vault: Vault, name: str, obj) -> None:
     vault.put_bytes(name, json.dumps(obj, default=str, ensure_ascii=False).encode("utf-8"))
 
 
-def _load_json(vault: Vault, name: str):
-    return json.loads(vault.get_bytes(name).decode("utf-8"))
+def _load_json(vault: Vault, name: str, max_age: Optional[float] = None):
+    if max_age is None:
+        return json.loads(vault.get_bytes(name).decode("utf-8"))
+    return json.loads(vault.get_bytes(name, max_age=max_age).decode("utf-8"))
+
+
+def response_prefixes(slug: str) -> List[str]:
+    """What "Check for new responses" needs re-read for one course: its
+    submissions and drafts, and its roster (exclusions, late adds). Everything
+    else in the vault — other courses, accounts, team designs — is left cached."""
+    return [f"resp__{slug}__", f"draft__{slug}__", key_roster(slug), key_survey(slug)]
 
 
 # --------------------------------------------------------------------------- #
@@ -194,6 +203,31 @@ def _contact_columns(df: pd.DataFrame):
     return full, first, last, email, section, klass
 
 
+def _cell(row, col) -> str:
+    """One spreadsheet cell as clean text; "" for a blank one.
+
+    `str(cell)` turns a blank pandas cell into the text "nan": a blank email
+    became the address "nan", a blank section the section "nan" (which the
+    same-section rule then treated as a real section), and a row with only a
+    stray value elsewhere a student called "nan nan". A whole-number cell read
+    as a float ("1.0") is written as "1". (PeerParley_AI 2.17.0 found the
+    same thing in its contact-list reader.)
+    """
+    if not col:
+        return ""
+    v = row.get(col)
+    if v is None:
+        return ""
+    try:
+        if pd.isna(v):
+            return ""
+    except (TypeError, ValueError):
+        pass
+    if isinstance(v, float) and v.is_integer():
+        return str(int(v))
+    return str(v).strip()
+
+
 def build_students(contact_df: pd.DataFrame) -> List[dict]:
     """Flat, de-duplicated, name-sorted list of student records from a roster.
 
@@ -207,12 +241,9 @@ def build_students(contact_df: pd.DataFrame) -> List[dict]:
     out: List[dict] = []
     seen = set()
     for _, row in contact_df.iterrows():
-        first = str(row.get(first_c, "")).strip() if first_c else ""
-        last = str(row.get(last_c, "")).strip() if last_c else ""
-        if full_c and pd.notna(row.get(full_c)) and str(row.get(full_c)).strip():
-            name = str(row[full_c]).strip()
-        else:
-            name = f"{first} {last}".strip()
+        first = _cell(row, first_c)
+        last = _cell(row, last_c)
+        name = _cell(row, full_c) or f"{first} {last}".strip()
         if not name:
             continue
         key = name_key(name)
@@ -221,15 +252,15 @@ def build_students(contact_df: pd.DataFrame) -> List[dict]:
         seen.add(key)
         extra = {}
         for c in extra_cols:
-            v = row.get(c)
-            if pd.notna(v) and str(v).strip():
-                extra[str(c)] = str(v).strip()
+            v = _cell(row, c)
+            if v:
+                extra[str(c)] = v
         out.append({
             "name": name,
             "first": first or name.split(" ")[0],
             "last": last or name.split(" ")[-1],
-            "email": str(row.get(email_c, "")).strip() if email_c else "",
-            "section": str(row.get(section_c, "")).strip() if section_c else "",
+            "email": _cell(row, email_c),
+            "section": _cell(row, section_c),
             "excluded": False,
             "extra": extra,
         })
@@ -300,10 +331,22 @@ def list_surveys(vault: Optional[Vault] = None):
                  if str(n).startswith("roster__") and str(n).endswith(".ppj")]
     except Exception:
         names = []
+    # The sidebar's course menu shows only course, label, owner and a head
+    # count, yet it re-read every course's roster each time the one-minute
+    # cache ran out: one round trip per course, on every click, growing with
+    # every semester kept. A summary up to ten minutes old is harmless here
+    # (the open course is always read fresh, and any change made in this app
+    # replaces the remembered copy at once), and the reads that are needed go
+    # out side by side rather than one after another.
+    age = SUMMARY_MAX_AGE
+    try:
+        vault.prefetch(names, max_age=age)
+    except Exception:  # noqa: BLE001
+        pass
     out = []
     for n in names:
         try:
-            snap = _load_json(vault, n)
+            snap = _load_json(vault, n, max_age=age)
         except Exception:
             continue
         students = snap.get("students", [])
@@ -416,13 +459,28 @@ def all_responses(vault: Vault, slug: str) -> Dict[int, dict]:
         names = [n for n in vault.list() if str(n).startswith(prefix)]
     except Exception:
         names = []
+    # Fetched side by side: on cloud storage each read is its own HTTPS round
+    # trip, and forty of them one after another was ten seconds or more.
+    #
+    # And a submission already read is trusted for up to ten minutes rather
+    # than one. Design Teams and Responses need every submission on every
+    # rerun, so each lapse of the one-minute cache cost a full re-read of the
+    # class. New submissions are still found within a minute (the listing is
+    # not held longer), a student's save goes through this same process and
+    # replaces the remembered copy at once, and "Check for new responses"
+    # drops it all on demand.
+    age = SUMMARY_MAX_AGE
+    try:
+        vault.prefetch(names, max_age=age)
+    except Exception:  # noqa: BLE001
+        pass
     out: Dict[int, dict] = {}
     for n in names:
         m = re.search(r"__p(\d+)\.ppj$", str(n))
         if not m:
             continue
         try:
-            payload = _load_json(vault, n)
+            payload = _load_json(vault, n, max_age=age)
         except Exception:
             continue
         # A draft saved by an older version under the submission key.

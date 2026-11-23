@@ -25,7 +25,7 @@ def render(ctx):
     if st.button("↻ Check for new responses", key="dash_refresh",
                  help="Stored data is re-read at most once a minute so clicks stay "
                       "fast. This re-reads it now."):
-        ctx.vault.refresh()
+        ctx.vault.refresh(svc.response_prefixes(ctx.slug))
         st.rerun()
 
     m = st.columns(4)

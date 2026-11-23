@@ -145,3 +145,62 @@ or Dropbox. It is now **0** per rerun (45 on a cold first paint).
 * The Microsoft 365 token was cached forever and would expire about an hour
   into a long-lived process; MSAL is now asked each time and renews it.
 * pCloud re-checked its folder before every write; now once per backend.
+
+## 1.4.0 — PeerParley_AI 2.16 – 2.21 carried over
+
+Ported what applies to team formation; grading rules, rough scoring, round
+copying and team editing are peer-evaluation features and were left out.
+
+**Speed on cloud storage** (6 courses × 40 students, 0.3 s per storage call,
+`tests/_slow_storage.py`):
+
+| action | 1.3.0 | 1.4.0 |
+|---|---|---|
+| open the app (cold) | 16.0 s | 4.1 s |
+| any click once the 1-minute cache has lapsed | 14.9 s | 1.1 s |
+| switch to another course | 12.5 s | 3.1 s |
+| Check for new responses | 14.9 s | 3.2 s |
+| a student opens their link | 1.5 s | 0.9 s |
+| a click with the cache warm | 0.3 s | 0.2 s |
+
+* `Vault.prefetch`: reads go out six at a time (first one alone, so a provider
+  signs in once). Used for submissions, the course menu, the open course's
+  files and the student form's four reads.
+* Course-menu summaries and already-read submissions are trusted for up to ten
+  minutes (new submissions still appear within a minute; changes made in the
+  app — including students' own saves — replace the cached copy at once;
+  **Check for new responses** re-reads everything for that course).
+* **Check for new responses** drops only that course's objects
+  (`refresh(prefixes)`), not the whole vault.
+* A file the fresh listing says does not exist costs no round trip; Design
+  Teams no longer re-uploads unchanged settings once a minute.
+* The three email composers run as fragments: typing reruns only the composer,
+  with no storage I/O.
+* Dropbox and pCloud listings now raise on failure instead of returning
+  "no files" (which made every course look empty).
+* Removed a per-student `parse_student` call on Design Teams that was computed
+  and thrown away on every rerun.
+
+**Email.** `{open_date}` / `{close_date}` placeholders (on the survey's
+scheduling clock; warns if a used date is not set). Mistyped placeholders are
+named before sending. New **Open in web mail — Outlook or Gmail** send method
+for instructors without a Microsoft 365 app registration. Plain-text versions
+keep link addresses — this also fixes TeamForge's Mac auto-send script and the
+`.eml` plain-text part, which dropped the survey link. Trimmed, mail-safe
+editor toolbar, "Edit the HTML directly", and a plain-text preview.
+
+**Contact lists.** Excel "Unicode Text", semicolon CSVs and workbooks with the
+roster on a later sheet now read; empty, PDF and corrupt files explain
+themselves. Fixed: blank cells were stored as the text `nan` (an email of
+"nan", a section of "nan" that the same-section rule treated as real, and
+"nan nan" students). The roster uploader is now per course — previously the
+file stayed in the uploader on a course switch and, because upload saves
+immediately, was imported into the next course opened.
+
+**Accounts.** New accounts and resets used the published password
+`TeamForge-Welcome`; temporary passwords are now random and shown once, and
+passwords under 8 characters are refused. Remove asks for confirmation; an
+admin cannot demote, deactivate or remove their own account.
+
+**Hygiene.** pyflakes-clean tree, keys on widgets in shared helpers, icon
+validation (`tests/test_release_hygiene.py`). 26 new tests (107 total).
